@@ -39,40 +39,74 @@ serial number, lot, order or PO.
 
 ### The data model
 
-Everything lives in one SQLite database: 92 tables and 4 views, with 153 foreign keys enforced on every write. These
-are the tables that tie the modules together. Every line in the diagram is a real foreign key.
+Everything lives in one SQLite database: 92 tables and 4 views, with 153 foreign keys enforced on every write. There
+are two views of it below, and every solid line in both is a real foreign key. Click a view's title to open or close it.
+
+<details open>
+<summary><b>System view</b>: which module owns which records, and how they join</summary>
+
+```mermaid
+flowchart LR
+    CORE[("Shared core<br/>unit · lot · item · site")]
+    MES["MES<br/>station_event · genealogy"]
+    QMS["QMS<br/>hold · quality_event<br/>warranty_claim · chargeback"]
+    ERP["ERP<br/>purchase_order · po_line<br/>erp_journal_entry"]
+    PS["Production scheduling<br/>build_plan · work_order"]
+    REP["Replenishment<br/>replenishment_policy"]
+    WMS["WMS<br/>inventory_balance · wms_snapshot"]
+    TMS["TMS<br/>shipment · shipment_unit"]
+    MRP["Material planning · ATP<br/>customer_order · order_line<br/>order_promise"]
+    CT["Control tower<br/>decision_log · outbound_message"]
+    DP["Data platform<br/>raw_* landing · contracts · evals"]
+    CORE ---|serial · child_lot_id| MES
+    CORE ---|serial · lot_id| QMS
+    CORE ---|lot.po_id| ERP
+    CORE ---|item_id · site_id · wo_id| PS
+    CORE ---|item_id · site_id| REP
+    CORE ---|lot_id · item_id · site_id| WMS
+    CORE ---|serial| TMS
+    CORE ---|vehicle / pack serial| MRP
+    QMS ---|je_id| ERP
+    QMS ---|decision_id| CT
+    MRP ---|decision_id| CT
+    TMS ---|order_id| MRP
+    MES ---|raw_id| DP
+    CORE -.-|read with SQL by contracts and evals| DP
+```
+
+Each box is a module and the main tables it owns. Each solid line is a foreign key between their tables, labeled
+with the join columns. Eight modules attach directly to the same core: serial numbers (`unit`), lots,
+items and sites. The other links cross between modules: a chargeback posts to an ERP journal entry, holds and new
+promises point back to the Control Tower decision that made them, a shipment points to its customer order, and a
+station event points to the raw CM message it came from. The dotted line isn't a foreign key: contracts and evals
+read the tables through SQL.
+
+</details>
+
+<details>
+<summary><b>Process view</b>: the recall process, table by table</summary>
 
 ```mermaid
 erDiagram
-    supplier ||--o{ purchase_order : "supplier_id"
-    purchase_order ||--o{ po_line : "po_id"
-    po_line |o--o{ lot : "po_id, po_line_no"
+    unit ||--o{ warranty_claim : "serial"
+    lot |o--o{ warranty_claim : "failed_lot_id"
     lot ||--o{ lot_link : "child / parent lot"
     lot |o--o{ genealogy : "child_lot_id"
     unit ||--o{ genealogy : "parent / child serial"
-    unit ||--o{ station_event : "serial"
-    shipment ||--o{ shipment_unit : "shipment_id"
-    unit ||--o{ shipment_unit : "serial"
-    customer_order ||--o{ order_line : "order_id"
-    unit |o--o{ order_line : "vehicle / pack serial"
-    customer_order ||--o{ order_promise : "order_id"
-    unit ||--o{ warranty_claim : "serial"
-    lot |o--o{ warranty_claim : "failed_lot_id"
-    chargeback |o--o{ warranty_claim : "chargeback_id"
-    supplier ||--o{ chargeback : "supplier_id"
-    erp_journal_entry |o--o{ chargeback : "je_id"
     unit |o--o{ hold : "serial"
     lot |o--o{ hold : "lot_id"
+    chargeback |o--o{ warranty_claim : "chargeback_id"
+    erp_journal_entry |o--o{ chargeback : "je_id"
     decision_log |o--o{ hold : "decision_id"
     decision_log |o--o{ chargeback : "decision_id"
-    decision_log |o--o{ order_promise : "decision_id"
-    decision_log |o--o{ outbound_message : "decision_id"
 ```
 
-A serial number (`unit`) links its as-built parts, station history, shipments, the order it was sold on, its warranty
-claims and any hold on it. A lot links back to the PO line it arrived on and, through `lot_link`, to the batches it
-was made from. Each closed-loop decision is referenced by the holds, chargebacks, promises and messages it wrote. The
-app's Data Sandbox shows the full model.
+A warranty claim names the vehicle and the failed cell lot. `lot_link` climbs from that lot to the batch it was made
+from and back down to its sibling lots, and `genealogy` fans out to every pack and vehicle built from them. The
+containment decision places the holds and drafts the chargeback. The claims are billed on that chargeback, and posting
+it creates the ERP journal entry. This is the walkthrough's story; the app's Data Sandbox shows the full model.
+
+</details>
 
 ## Systems
 
