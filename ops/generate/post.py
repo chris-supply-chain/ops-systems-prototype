@@ -173,7 +173,7 @@ def history(w):
          "Ops eng.", t(add_days(a, -40), 15), "Allocation priority tuple gains a fleet window; backtest OTD +2.4 pts.",
          tests[2], None, 1, json.dumps(["backtest on 60 days", "commercial sign-off"]), "Commercial ops", "DEPLOYED",
          t(add_days(a, -38)), None, None),
-        ("CR-0012", "Promise parser 1.2: Spanish confirmations and 'ETD dd-Mon-yyyy'", "ops.ingest.email", "LOGIC",
+        ("CR-0012", "Promise parser 1.2: Spanish confirmations and 'ETD dd-Mon-yyyy'", "ops.ingest.documents", "LOGIC",
          "Coding agent (Claude)", t(add_days(a, -24), 13),
          "Coverage 81% -> 88% with precision held at 100% (parser abstains instead of guessing).",
          tests[5], ids.get(("EV-PROMISE-PARSE", "parser-1.2")), 1,

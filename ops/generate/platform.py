@@ -323,7 +323,7 @@ SUITES = [
     ("EV-WARRANTY-CLS", "Warranty symptom classifier", "ops.ingest.warranty", "LABELED_SET", "accuracy", 0.90,
      "Free-text CRM symptoms mapped to defect codes, scored against the true failure mode. An LLM classifier would be "
      "swapped in behind the same harness and must beat this score to ship."),
-    ("EV-PROMISE-PARSE", "Supplier email & Excel promise extraction", "ops.ingest.email", "LABELED_SET",
+    ("EV-PROMISE-PARSE", "Supplier email & Excel promise extraction", "ops.ingest.documents", "LABELED_SET",
      "precision on committed parses", 1.0,
      "Every date the parser writes must be right (precision 100%); when unsure it must abstain. Coverage is tracked "
      "and must stay >= 80%."),

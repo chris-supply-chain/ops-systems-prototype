@@ -334,7 +334,7 @@ def edi_and_portal(w):
 def _edi855(ln, promise, ack, t):
     ts = t.astimezone(UTC)
     ctrl = int(hashlib.md5(f"{ln['po_id']}-{ln['line_no']}-{ack}".encode()).hexdigest()[:8], 16) % 10 ** 9
-    return ("ISA*00*          *00*          *ZZ*SUPPLIER       *ZZ*OEMMOBILITY   *"
+    return ("ISA*00*          *00*          *ZZ*SUPPLIER       *ZZ*OEMMOBILITY    *"
             f"{ts:%y%m%d}*{ts:%H%M}*U*00401*{ctrl:09d}*0*P*>~"
             f"GS*PR*SUPPLIER*OEMMOBILITY*{ts:%Y%m%d}*{ts:%H%M}*{ctrl % 100000}*X*004010~ST*855*0001~"
             f"BAK*00*AC*{ln['po_id']}*{ts:%Y%m%d}~PO1*{ln['line_no']}*{int(ln['qty'])}*EA*{ln['unit_price']:.2f}**BP*{ln['item']}~"
