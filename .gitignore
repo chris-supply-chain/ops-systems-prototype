@@ -1,0 +1,37 @@
+# Generated: `python3 app.py` builds the database here and rebuilds it identically from the seed
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# JavaScript tooling (the app itself has no dependencies)
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Secrets and local settings
+.env
+.env.*
+
+# Logs
+*.log
+
+# Editors and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
