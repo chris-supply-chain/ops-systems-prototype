@@ -37,7 +37,8 @@ The flow reads CM line 70 → Port of Taichung 276 → Pacific 559 → Oakland +
 111 → 287 delivered this week. Packs join at the 3PL: pack line 92, 3PL packs 194.
 
 **In one line:** "The dip is real: the CM in Taichung was closed Friday for the Mid-Autumn Festival. Everything on this screen
-comes from partner feeds landed raw and normalized. The queue below is ranked by impact."
+comes from partner feeds landed raw and normalized. The queue below is ranked by severity, and each item shows its
+impact."
 
 **Top exception:** capacity-fade claims clustering on cathode batch **CA2605-103**. There are 12 claims in 30 days
 ($5,416) on cell lots CL2606-105 (8) and CL2606-104 (4). That is **16.7 per 1,000 pack-months in service vs 1.2 for

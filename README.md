@@ -56,8 +56,9 @@ flowchart LR
     subgraph IN["Inbound feeds"]
         direction LR
         A["CM line feed<br/>MES events and<br/>as-built records,<br/>quarantined and replayed<br/>when the mapping changes"]
-        B["Supplier emails,<br/>Excel and EDI<br/>PO confirmations<br/>and promise dates"]
+        B["Supplier emails,<br/>Excel, EDI and portal<br/>PO confirmations<br/>and promise dates"]
         C["Customer orders"]
+        J["Other feeds<br/>supplier ASNs,<br/>carrier and 3PL events,<br/>customs entries,<br/>warranty cases,<br/>CM daily reports and<br/>supplier stock sheets"]
     end
     subgraph CORE["One shared data model"]
         D[("schema.sql<br/>92 tables · 4 views")]
