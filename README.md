@@ -19,6 +19,38 @@ more modules in one place, all running on one shared data model.**
 
 **The database is the truth: modules are views, feeds are inputs, messages are outputs.**
 
+**The code is laid out the same way: a folder for each stage the data passes through, and a header on each module
+saying what it holds.**
+
+```
+app.py           start here: builds the database if it is missing, then serves the app
+ops/
+  schema.sql     every table, view, index and foreign key (defined nowhere else)
+  db.py          the app's database connections, query helpers and the dataset's clock
+  generate/      the simulator: a mock world and the raw feeds its outside systems send
+  ingest/        feed loaders: raw payloads in, the shared core out
+  logic/         the rules: planning, parts tracing, decisions, data contracts, evals
+  api/           the HTTP server; routes/ holds the JSON API, one file per page area
+web/
+  js/pages/      one file per page, 24 in all
+  js/lib/        code the pages share: markup, API calls, formatting, components, charts, icons
+  css/app.css    the design system
+tests/           unit, integration and end-to-end tests
+docs/            walkthrough, code conventions, design system, screenshots
+data/            the generated database (not in git)
+```
+
+- **Folders follow the data.** Feeds enter through `ingest/`; the data is planned, checked and acted on in `logic/`,
+  served by `api/` and drawn in `web/`. To trace a number on screen back to its feed, open the folders in reverse.
+- **Adding a page is local.** A page is one file in `web/js/pages/` plus its entries in `PAGES` and `MODULES` in
+  `web/js/app.js`, and any API it calls lives in `ops/api/routes/`. Nothing else needs registering: the server loads
+  every route file at startup, and the shell won't start if the menu and the pages disagree.
+- **Files open with a header** that says what they hold: all 76 non-empty Python modules, all 31 JavaScript files, the
+  stylesheet and `schema.sql`. Inside, comments give the reason where the code alone doesn't.
+- **The headers are an index for reuse.** Before writing a new function, a person or an AI assistant can read the
+  headers to find the module that already does the job, and extend it instead of writing a second copy.
+  `docs/CONVENTIONS.md` lists the shared helpers and the pattern every route and page follows.
+
 ```mermaid
 flowchart TD
     subgraph IN["Inbound"]
@@ -334,20 +366,6 @@ The suite passes on dataset dates across 2026 and early 2027, and on Python 3.9 
 - **Data:** a deterministic simulator that also produces the raw inputs: CM MES messages (JSON), X12 855 supplier
   acknowledgments, pipe-delimited carrier events, RFC 822 emails and Excel files.
 - **Tests:** Python `unittest`, including end-to-end runs of every closed loop.
-
-## Project layout
-
-```
-app.py            start here: builds the database if it is missing, then serves the app
-ops/schema.sql    the data model
-ops/generate/     the simulator that creates the mock world
-ops/ingest/       loaders for each data feed (CM MES, supplier ASNs, carriers, 3PL, email + Excel, warranty)
-ops/logic/        planning, parts tracing, closed-loop decisions, data contracts, evals
-ops/api/          the HTTP server and JSON routes
-web/              the browser app: shell, design system, one module per page
-tests/            unit, integration and end-to-end tests
-docs/             walkthrough, code conventions, design system, screenshots
-```
 
 ## Status
 
