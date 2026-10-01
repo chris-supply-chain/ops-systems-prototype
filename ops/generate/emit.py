@@ -7,11 +7,12 @@ import datetime as dt
 import hashlib
 import json
 
+from ..dates import iso
 from .demand import EXTRA_PACK_PRICE, KIT_PRICE
 from .emails import CM_DEFECT, CM_PN
 from .master import CARRIER_BY_NAME, ITEMS
 from .platform import ACTIVITIES, CAPABILITIES, FEATURES, FIT, OPTIONS, SUITES, SYSTEMS, VENDORS
-from .util import PT, TPE, UTC, add_days, at, iso
+from .util import PT, TPE, UTC, add_days, at
 
 CM_RESULT_V1 = {"PASS": "OK", "FAIL": "NG", "REWORK": "RWK", "SCRAP": "SCR"}
 EDI315 = {"GATE_IN": ("I", "TWTXG"), "LOADED": ("AE", "TWTXG"), "DEPARTED": ("VD", "TWTXG"),

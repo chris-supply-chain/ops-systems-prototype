@@ -88,7 +88,7 @@ GRAIN = {
     "hold": "One hold on one serial or one lot: where, why, when placed and released, and by which decision.",
     # action
     "ops_exception": "One problem a rule raised, such as 'BMS-B runs out Sep 30'. It resolves itself when the condition clears.",
-    "decision_log": "One decision, proposed or executed: its evidence, the action, the impact and what it wrote.",
+    "decision_log": "One decision, proposed or executed: its evidence, the action, the impact, what it wrote and what it achieved.",
     "outbound_message": "One message the platform sent or queued to another system or a customer.",
     "chargeback": "One chargeback to a supplier: amount, status and the journal entry that booked it.",
     "chargeback_line": "One line of a chargeback: one claim, or one cost such as inspection.",
@@ -105,7 +105,7 @@ GRAIN = {
     "contract_run": "One run of one contract: when, and how many rows broke it.",
     "eval_suite": "One eval suite: the code it scores, the metric and the threshold to pass.",
     "eval_golden": "One golden case: the right answer for one input, from the simulator's truth or built by hand.",
-    "eval_run": "One run of one eval suite: the version tested, cases passed, score and gate.",
+    "eval_run": "One run of one eval suite: the version tested, cases passed, score, gate and the previous score it is compared with.",
     "eval_case": "One case in one eval run: expected against actual, pass or fail.",
     "test_run": "One run of the test suite: tests, failures and errors.",
     "change_review": "One change to a mapping, rule or logic, with the evidence that let it deploy and the reviewer.",

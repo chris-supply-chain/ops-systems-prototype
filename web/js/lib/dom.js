@@ -44,6 +44,15 @@ export function on(root, event, selector, handler, opts) {
   return () => root.removeEventListener(event, fn, opts);
 }
 
+// Delegated listeners for an element that outlives one render: listen() adds one, clear() removes them all.
+export function listeners() {
+  let offs = [];
+  return {
+    listen: (root, event, selector, handler) => { offs.push(on(root, event, selector, handler)); },
+    clear: () => { offs.forEach((off) => off()); offs = []; },
+  };
+}
+
 export function injectStyle(id, css) {
   if (document.getElementById(id)) return;
   const el = document.createElement('style');

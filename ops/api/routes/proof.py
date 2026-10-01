@@ -17,11 +17,12 @@ def overview(req):
     suites = q(c, "SELECT * FROM eval_suite ORDER BY suite_id")
     out = []
     for s in suites:
-        runs = q(c, "SELECT run_id, ran_at, subject_version, cases, passed, score, gate, metrics_json FROM eval_run"
-                    " WHERE suite_id=? ORDER BY ran_at, run_id", (s["suite_id"],))
+        runs = q(c, "SELECT run_id, ran_at, subject_version, cases, passed, score, gate, prev_score, regressed, metrics_json"
+                    " FROM eval_run WHERE suite_id=? ORDER BY ran_at, run_id", (s["suite_id"],))
         latest = runs[-1] if runs else None
         out.append({**s, "latest": latest, "history": [{"ran_at": r["ran_at"], "score": r["score"], "gate": r["gate"],
-                                                        "version": r["subject_version"]} for r in runs],
+                                                        "regressed": r["regressed"], "version": r["subject_version"]}
+                                                       for r in runs],
                     "metrics": json.loads(latest["metrics_json"]) if latest and latest["metrics_json"] else {}})
     tests = q(c, "SELECT * FROM test_run ORDER BY run_id DESC LIMIT 12")
     latest_test = tests[0] if tests else None
@@ -35,6 +36,7 @@ def overview(req):
     return {"suites": out, "tests": tests, "latest_test": latest_test, "contracts": contracts, "reviews": reviews,
             "summary": {"evals_pass": sum(1 for s in out if s["latest"] and s["latest"]["gate"] == "PASS"),
                         "evals_total": len(out),
+                        "evals_regressed": sum(1 for s in out if s["latest"] and s["latest"]["regressed"]),
                         "contracts_failing": sum(1 for x in contracts if (x["violations"] or 0) > 0),
                         "contracts_total": len(contracts),
                         "reviews_open": sum(1 for r in reviews if r["status"] == "OPEN"),

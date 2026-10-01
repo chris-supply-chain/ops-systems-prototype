@@ -5,8 +5,10 @@ eval and test runs, change reviews) that the current runs extend.
 import datetime as dt
 import json
 
+from ..dates import iso
 from ..logic.chargeback import claim_lines, post_to_erp, write_chargeback
-from .util import PT, TPE, UTC, add_days, at, iso
+from ..logic.evals import compare_with_last
+from .util import PT, TPE, UTC, add_days, at
 
 
 def post_ingest(w):
@@ -114,7 +116,9 @@ def history(w):
          "RTV the lot, expedite replacement, charge back Summit (CB-0004)", None, "EXECUTED", t(add_days(a, -34), 16),
          "SQE", t(add_days(a, -33)), json.dumps({"writes": {"quality_event": 1, "chargeback": 1}})),
     ]
-    c.executemany("INSERT INTO decision_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dec)
+    c.executemany("INSERT INTO decision_log(decision_id, loop, rule_id, trigger_ref, title, rationale, inputs_json,"
+                  " proposed_action, impact_json, status, proposed_at, decided_by, executed_at, outcome_json)"
+                  " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dec)
     c.execute("UPDATE chargeback SET decision_id='D-0101' WHERE chargeback_id='CB-0003'")
     c.execute("UPDATE chargeback SET decision_id='D-0102' WHERE chargeback_id='CB-0004'")
     out = [
@@ -146,8 +150,10 @@ def history(w):
     runs.append(("EV-CM-MES", iso(w.schema_cutover + dt.timedelta(minutes=35)), "v1", 400, 373, 0.9325, "FAIL"))
     ids = {}
     for r in sorted(runs, key=lambda r: r[1]):
-        cur = c.execute("INSERT INTO eval_run(suite_id, ran_at, subject_version, cases, passed, score, gate, metrics_json)"
-                        " VALUES (?,?,?,?,?,?,?,?)", r + (json.dumps({"historical": True}),))
+        prev_score, regressed = compare_with_last(c, r[0], r[1], r[5])
+        cur = c.execute("INSERT INTO eval_run(suite_id, ran_at, subject_version, cases, passed, score, gate, prev_score,"
+                        " regressed, metrics_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        r + (prev_score, regressed, json.dumps({"historical": True})))
         ids[(r[0], r[2])] = cur.lastrowid
     tests = []
     for k, (n, fails) in enumerate([(31, 0), (38, 2), (38, 0), (44, 0), (52, 1), (52, 0), (58, 0)]):

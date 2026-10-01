@@ -19,21 +19,13 @@ transit for the region.
 import datetime as dt
 from collections import deque
 
+from ..dates import skip_sundays, to_date
 from ..db import as_of as get_as_of
 
 TRANSIT_MAX = {"WEST": 3, "MOUNTAIN": 4, "CENTRAL": 5, "EAST": 6}
 KIT_CAPACITY = {0: 160, 1: 160, 2: 160, 3: 160, 4: 160, 5: 80, 6: 0}
 PORT_TO_3PL_DAYS = 4          # discharge, customs, drayage, receipt + putaway
 TRANSIT_DAYS = 15
-
-
-def skip_sundays(day, n):
-    d = day
-    while n > 0:
-        d += dt.timedelta(days=1)
-        if d.weekday() != 6:
-            n -= 1
-    return d
 
 
 def next_sailing_available(build_day):
@@ -50,13 +42,9 @@ def next_truck_available(ready_day):
     return d + dt.timedelta(days=2)
 
 
-def _d(s):
-    return dt.date.fromisoformat(s[:10])
-
-
 def vehicle_supply(conn, eta_mode="current"):
     """{sku: [(date_kit_able, qty, source)]} for every vehicle not yet committed to an order."""
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     lots = {}
 
     def add(sku, day, q, src):
@@ -80,12 +68,12 @@ def vehicle_supply(conn, eta_mode="current"):
         if r["customs"] == "EXAM":
             day = as_of + dt.timedelta(days=2 + 2)
         elif r["ata"]:
-            day = max(_d(r["ata"]) + dt.timedelta(days=PORT_TO_3PL_DAYS), as_of + dt.timedelta(days=1))
+            day = max(to_date(r["ata"]) + dt.timedelta(days=PORT_TO_3PL_DAYS), as_of + dt.timedelta(days=1))
         elif r["status"] in ("BOOKED", "GATED_IN") or not r["eta_current"]:
-            day = _d(r["etd_planned"]) + dt.timedelta(days=TRANSIT_DAYS + PORT_TO_3PL_DAYS)
+            day = to_date(r["etd_planned"]) + dt.timedelta(days=TRANSIT_DAYS + PORT_TO_3PL_DAYS)
         else:
             eta = r["eta_planned"] if eta_mode == "planned" else r["eta_current"]
-            day = _d(eta) + dt.timedelta(days=PORT_TO_3PL_DAYS)
+            day = to_date(eta) + dt.timedelta(days=PORT_TO_3PL_DAYS)
         add(r["item_id"], day, r["n"], f"{r['shipment_id']} · {r['vessel']} {r['voyage']}")
     for r in conn.execute("""SELECT item_id, status, COUNT(*) n FROM unit u
                              WHERE item_id LIKE 'LV1-%' AND status IN ('BUILT','WIP')
@@ -95,7 +83,7 @@ def vehicle_supply(conn, eta_mode="current"):
         add(r["item_id"], next_sailing_available(as_of), r["n"], "CM finished goods" if r["status"] == "BUILT" else "CM WIP")
     for r in conn.execute("SELECT item_id, plan_date, SUM(qty) q FROM build_plan WHERE plan_type='CM_COMMIT' AND plan_date > ?"
                           " GROUP BY item_id, plan_date", (as_of.isoformat(),)):
-        b = _d(r["plan_date"])
+        b = to_date(r["plan_date"])
         add(r["item_id"], next_sailing_available(b), r["q"], f"CM build {b.isoformat()}")
     for sku in lots:
         lots[sku].sort(key=lambda x: x[0])
@@ -103,7 +91,7 @@ def vehicle_supply(conn, eta_mode="current"):
 
 
 def pack_supply(conn, constrained=None):
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     lots = {}
 
     def add(sku, day, q, src):
@@ -117,7 +105,7 @@ def pack_supply(conn, constrained=None):
                              JOIN shipment_unit su ON su.serial=u.serial
                              JOIN shipment s ON s.shipment_id=su.shipment_id AND s.leg='PLANT_TO_3PL'
                              WHERE u.status='IN_TRANSIT' AND u.item_id LIKE 'PK-%' GROUP BY u.item_id, s.shipment_id"""):
-        add(r["item_id"], _d(r["eta_current"]) + dt.timedelta(days=1), r["n"], f"DG truck {r['shipment_id']}")
+        add(r["item_id"], to_date(r["eta_current"]) + dt.timedelta(days=1), r["n"], f"DG truck {r['shipment_id']}")
     for r in conn.execute("SELECT item_id, status, COUNT(*) n FROM unit WHERE item_id LIKE 'PK-%' AND status IN ('BUILT','WIP')"
                           " AND on_hold=0 GROUP BY item_id, status"):
         add(r["item_id"], next_truck_available(as_of + dt.timedelta(days=0 if r["status"] == "BUILT" else 1)), r["n"],
@@ -151,7 +139,7 @@ def open_orders(conn):
 
 def allocate(conn, vehicles, packs, orders, extra=None, horizon=180):
     """Day-stepped allocation. Returns {order_id: {...promise, pegs...}} (+ the extra hypothetical order)."""
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     queues = {}
     arrivals = {}
     for lots in (vehicles, packs):
@@ -161,7 +149,7 @@ def allocate(conn, vehicles, packs, orders, extra=None, horizon=180):
     pending = []
     for o in orders:
         fleet = o["channel"] == "FLEET"
-        open_day = (_d(o["requested_date"]) - dt.timedelta(days=14)) if fleet and o["requested_date"] else as_of
+        open_day = (to_date(o["requested_date"]) - dt.timedelta(days=14)) if fleet and o["requested_date"] else as_of
         prio = (0 if fleet else 1, (o["requested_date"] if fleet else (o["reserved_at"] or o["ordered_at"])) or "")
         pending.append((prio, open_day, dict(o)))
     if extra:
@@ -212,28 +200,9 @@ def promise_all(conn, eta_mode="current", constrained=None):
     return allocate(conn, v, p, open_orders(conn)), v, p
 
 
-def check(conn, kit, region="WEST", extra_pack=None, qty=1):
-    """Promise a hypothetical new order at the back of the queue (CTP: kitting capacity + both supply chains)."""
-    kit_row = conn.execute("""SELECT b1.child_item_id AS v, b2.child_item_id AS p FROM bom_line b1
-                              JOIN bom_line b2 ON b2.parent_item_id=b1.parent_item_id AND b2.position='PACK'
-                              WHERE b1.parent_item_id=? AND b1.position='VEHICLE'""", (kit,)).fetchone()
-    if not kit_row:
-        raise ValueError(f"unknown kit {kit}")
-    v, p = vehicle_supply(conn), pack_supply(conn)
-    extras = []
-    for k in range(qty):
-        extras.append({"order_id": f"NEW-{k + 1}", "channel": "D2C", "reserved_at": None, "ordered_at": "~",
-                       "requested_date": None, "ship_to_region": region, "vehicle_sku": kit_row["v"],
-                       "pack_sku": kit_row["p"], "extra_pack": extra_pack})
-    orders = [dict(o) for o in open_orders(conn)]
-    res = allocate(conn, v, p, orders + extras[:-1] if qty > 1 else orders, extra=extras[-1])
-    return {"kit": kit, "vehicle_sku": kit_row["v"], "pack_sku": kit_row["p"], "region": region, "qty": qty,
-            "results": [res.get(e["order_id"]) for e in extras]}
-
-
 def atp_table(conn, weeks=12):
     """Classic ATP by SKU and week: supply, committed to orders, uncommitted (cumulative)."""
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     res, v, p = promise_all(conn)
     table = {}
     for lots in (v, p):
@@ -247,7 +216,7 @@ def atp_table(conn, weeks=12):
     for oid, r in res.items():
         for sku, pegs in r.get("pegs", {}).items():
             for pg in pegs:
-                k = (_d(pg["available"]) - as_of).days // 7
+                k = (to_date(pg["available"]) - as_of).days // 7
                 if sku in table and 0 <= k < weeks:
                     table[sku][k]["committed"] += 1
     for sku, rows in table.items():

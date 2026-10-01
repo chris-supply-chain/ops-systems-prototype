@@ -55,6 +55,24 @@ class BuiltWorld(unittest.TestCase):
                      "QUALITY-DEVIATION-OVERRUN"):
             self.assertIn(rule, rules)
 
+    def test_each_eval_run_is_compared_with_the_one_before(self):
+        """prev_score is the suite's previous run and regressed marks a fall, for seeded history and live runs alike. The
+        CM feed's cutover morning is one of the falls."""
+        last = {}
+        for r in self.conn.execute("SELECT suite_id, score, prev_score, regressed FROM eval_run ORDER BY suite_id, ran_at, run_id"):
+            prev = last.get(r["suite_id"])
+            self.assertEqual(r["prev_score"], prev)
+            self.assertEqual(r["regressed"], int(prev is not None and r["score"] < prev))
+            last[r["suite_id"]] = r["score"]
+        self.assertGreater(self.conn.execute("SELECT COUNT(*) n FROM eval_run WHERE suite_id='EV-CM-MES' AND regressed=1")
+                           .fetchone()["n"], 0)
+
+    def test_every_proposed_decision_points_at_the_exception_it_answers(self):
+        """Linked by the exception's id, so DATA's decision (about station S65) finds its exception (about the feed)."""
+        for d in self.conn.execute("SELECT decision_id FROM decision_log WHERE status='PROPOSED'").fetchall():
+            n = self.conn.execute("SELECT COUNT(*) n FROM ops_exception WHERE decision_id=?", (d["decision_id"],)).fetchone()["n"]
+            self.assertEqual(n, 1, d["decision_id"])
+
     def test_one_proposed_decision_per_loop(self):
         loops = [r["loop"] for r in self.conn.execute("SELECT loop FROM decision_log WHERE status='PROPOSED'")]
         self.assertEqual(sorted(loops), ["DATA", "PROMISE", "QUALITY", "SUPPLY"])
@@ -272,6 +290,7 @@ class ClosedLoops(unittest.TestCase):
     def test_mapping_fix_passes_every_gate_and_heals_as_built(self):
         o = self.out["DATA"]
         self.assertTrue(o["ok"], o.get("gates"))
+        self.assertIn("no_eval_regressed", o["gates"])
         self.assertEqual(o["c_gen_05_after"], 0)
         self.assertEqual(evals.run_suite(self.conn, "EV-CM-MES")["gate"], "PASS")
         self.assertEqual(evals.run_suite(self.conn, "EV-GENEALOGY")["gate"], "PASS")
@@ -289,6 +308,29 @@ class ClosedLoops(unittest.TestCase):
         self.assertGreater(self.out["PROMISE"]["orders"], 0)
         from ops.logic.promises import at_risk
         self.assertEqual(at_risk(self.conn), [])
+
+    def test_each_decision_records_what_it_achieved(self):
+        """After each loop runs, every figure it promised is counted again from the data. Containment, expedite and the
+        mapping fix achieve exactly what they proposed; the re-promise covers the orders at risk when it ran."""
+        for loop, o in self.out.items():
+            row = self.conn.execute("SELECT impact_json, achieved_json FROM decision_log WHERE decision_id=?",
+                                    (o["decision_id"],)).fetchone()
+            impact, achieved = json.loads(row["impact_json"]), json.loads(row["achieved_json"])
+            self.assertEqual(set(achieved["figures"]), set(impact), loop)
+            if loop != "PROMISE":
+                self.assertEqual(achieved["figures"], impact, loop)
+        figures = json.loads(self.conn.execute("SELECT achieved_json FROM decision_log WHERE decision_id=?",
+                                               (self.out["PROMISE"]["decision_id"],)).fetchone()["achieved_json"])["figures"]
+        self.assertEqual(figures["orders"], self.out["PROMISE"]["orders"])
+
+    def test_the_problems_the_loops_target_clear(self):
+        """Re-detection after each loop: the line-stop risk, the quarantine and the promises at risk are gone. (The
+        quality cluster stays: holds contain the batch, they don't erase its claims.)"""
+        for loop in ("SUPPLY", "DATA", "PROMISE"):
+            achieved = json.loads(self.conn.execute("SELECT achieved_json FROM decision_log WHERE decision_id=?",
+                                                    (self.out[loop]["decision_id"],)).fetchone()["achieved_json"])
+            self.assertTrue(achieved["exceptions"], loop)
+            self.assertEqual({e["after"]["status"] for e in achieved["exceptions"]}, {"RESOLVED"}, loop)
 
     def test_every_write_is_attributed_to_its_decision(self):
         n = self.conn.execute("SELECT COUNT(*) n FROM outbound_message WHERE decision_id IS NULL AND created_at >= "

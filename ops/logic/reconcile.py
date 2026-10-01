@@ -15,13 +15,10 @@ go and look.
 import datetime as dt
 from zoneinfo import ZoneInfo
 
+from ..dates import month_day
+
 TAIPEI = "+8 hours"
 PT = ZoneInfo("America/Los_Angeles")
-
-
-def _md(day):
-    d = dt.date.fromisoformat(str(day)[:10])
-    return f"{d:%b} {d.day}"
 
 
 def _pt(ts):
@@ -147,7 +144,7 @@ def cm_stock_vs_units(conn):
     return {
         "id": "cm-stock", "title": "CM consigned-stock Excel vs our serialized count",
         "question": "Is the OEM-owned stock sitting at the CM in Taiwan where both of us think it is?",
-        "a": {"system": f"CM report · {_md(day)}", "table": "cm_stock_report", "value": a, "unit": "units"},
+        "a": {"system": f"CM report · {month_day(day)}", "table": "cm_stock_report", "value": a, "unit": "units"},
         "b": {"system": "Serials at CM-TXG", "table": "unit", "value": b, "unit": "units"},
         "delta": a - b, "status": _status(a - b, explained if all(r["residual"] == 0 for r in rows) else None),
         "explanation": " ".join(f"{r['item_id']}: {r['why']}" for r in rows if r["delta"]) or "All items agree.",
@@ -323,7 +320,7 @@ def invoice_price_match(conn):
         c0 = contract[0]
         expl.append(f"The contract check finds {_n(len(contract), 'PO line')} priced above the contract, ${overpay:,.0f} "
                     f"overpaid if invoiced as ordered: {c0['item_id']} at ${c0['po_price']:.2f} vs ${c0['contract_price']:.2f} "
-                    f"({c0['contract_ref']})" + (f", a price superseded on {_md(c0['superseded_on'])}" if c0["superseded_on"] else "")
+                    f"({c0['contract_ref']})" + (f", a price superseded on {month_day(c0['superseded_on'])}" if c0["superseded_on"] else "")
                     + ". Three-way match will pass these, because PO, receipt and invoice agree with each other; "
                     "only the contract sees that the PO itself is wrong.")
         if uninvoiced:

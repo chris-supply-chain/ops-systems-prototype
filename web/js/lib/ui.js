@@ -3,6 +3,7 @@
 import { html, raw, esc, on, $, toHTML, SafeHTML } from './dom.js';
 import { icon } from './icons.js';
 import { fmt } from './format.js';
+import { charts } from './charts.js';
 
 // --- page context (set by app.js before each render) ----------------------
 let CURRENT = {};
@@ -108,7 +109,7 @@ function kpi({ label, value, unit, delta, deltaGood = 'up', deltaLabel, hint, sp
     const st = typeof status === 'string' ? { tone: status, label: fmt.title(status) } : status;
     statusHtml = chip(st.tone, st.label);
   }
-  const sparkHtml = spark && spark.length > 1 ? sparkline(spark) : '';
+  const sparkHtml = spark && spark.length > 1 ? charts.sparkline(spark) : '';
   return html`<div class="kpi${cls ? ' ' + cls : ''}">
     <div class="kpi-top"><span class="kpi-label">${label}</span>${statusHtml}</div>
     <div class="kpi-value">${value ?? '—'}${unit ? html`<span class="kpi-unit">${unit}</span>` : ''}</div>
@@ -116,22 +117,6 @@ function kpi({ label, value, unit, delta, deltaGood = 'up', deltaLabel, hint, sp
     ${hint ? html`<div class="kpi-hint">${hint}</div>` : ''}
     ${sparkHtml ? html`<div class="kpi-spark">${sparkHtml}</div>` : ''}
   </div>`;
-}
-
-// Minimal sparkline (duplicated from charts.js to avoid an import cycle):
-// de-emphasis line with the current period dot in the accent.
-function sparkline(values, { width = 88, height = 26 } = {}) {
-  const vals = values.map(Number).filter((v) => isFinite(v));
-  if (vals.length < 2) return '';
-  const min = Math.min(...vals), max = Math.max(...vals);
-  const pad = 3, w = width - pad * 2, h = height - pad * 2;
-  const x = (i) => pad + (i / (vals.length - 1)) * w;
-  const y = (v) => pad + (max === min ? h / 2 : h - ((v - min) / (max - min)) * h);
-  const d = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
-  const lx = x(vals.length - 1), ly = y(vals[vals.length - 1]);
-  return raw(`<svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true">` +
-    `<path d="${d}" fill="none" style="stroke:var(--series-other)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>` +
-    `<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="2.6" style="fill:var(--series-1);stroke:var(--surface)" stroke-width="1.5"/></svg>`);
 }
 
 // --- card ------------------------------------------------------------------

@@ -9,8 +9,9 @@ on-time delivery can be backtested.
 import datetime as dt
 import hashlib
 
+from ..dates import skip_sundays
 from ..db import as_of as get_as_of
-from .atp import TRANSIT_MAX, promise_all, skip_sundays
+from .atp import TRANSIT_MAX, promise_all
 
 
 def _noise(order_id, lo, hi):

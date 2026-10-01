@@ -409,12 +409,3 @@ def write_master(w):
     ])
     c.executemany("INSERT INTO defect_code VALUES (?,?,?,?,?)", DEFECT_CODES)
     c.executemany("INSERT INTO gl_account VALUES (?,?,?)", GL_ACCOUNTS)
-
-
-def price_on(conn, item_id, supplier_id, day, qty=0):
-    """Effective unit price for an item/supplier on a date (respects price breaks)."""
-    row = conn.execute(
-        "SELECT price_id, unit_price FROM price WHERE item_id=? AND supplier_id=? AND eff_from<=?"
-        " AND (eff_to IS NULL OR eff_to>?) AND min_qty<=? ORDER BY min_qty DESC, eff_from DESC LIMIT 1",
-        (item_id, supplier_id, day, day, qty)).fetchone()
-    return row

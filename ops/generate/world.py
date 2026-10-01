@@ -9,7 +9,8 @@ import datetime as dt
 import random
 from collections import defaultdict
 
-from .util import (PT, TPE, TW_HOLIDAYS, US_HOLIDAYS, UTC, add_days, at, iso, next_workday, workdays)
+from ..dates import iso
+from .util import (PT, TPE, TW_HOLIDAYS, US_HOLIDAYS, UTC, add_days, at, next_workday, workdays)
 
 
 class ShiftClock:

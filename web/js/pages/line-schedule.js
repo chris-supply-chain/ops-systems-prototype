@@ -1,6 +1,6 @@
 // Line Schedule: every line, every day. The committed build against rated capacity and the site's time fences, what
 // actually ran, the pack days MRP says the BMS shortage would cut, and the next shift's dispatch list in run order.
-import { html, on, injectStyle } from '../lib/dom.js';
+import { html, listeners, injectStyle } from '../lib/dom.js';
 import { api } from '../lib/api.js';
 import { ui, link } from '../lib/ui.js';
 import { fmt } from '../lib/format.js';
@@ -20,12 +20,11 @@ const ZONE = { past: 'Actual', frozen: 'Frozen', slushy: 'Slushy', liquid: 'Liqu
 const TZ = { 'Asia/Taipei': 'Taipei time', 'America/Los_Angeles': 'Pacific time' };
 
 let S = null;
-let OFFS = [];
-const listen = (root, ev, sel, fn) => OFFS.push(on(root, ev, sel, fn));
-function cleanup() { OFFS.forEach((off) => off()); OFFS = []; }
+// The page root persists across renders, so every delegated listener is tracked and removed.
+const LISTENERS = listeners();
 
 export async function render(el, ctx) {
-  cleanup();
+  LISTENERS.clear();
   injectStyle('page-line-schedule', PAGE_CSS);
   const weeks = ctx.query.get('weeks') === '8' ? 8 : 4;
   const d = await api.get('/api/schedule/board', { back: 7, ahead: weeks === 8 ? 49 : 21 });
@@ -34,7 +33,7 @@ export async function render(el, ctx) {
 }
 
 export function unmount() {
-  cleanup();
+  LISTENERS.clear();
   S = null;
 }
 
@@ -82,8 +81,8 @@ function draw() {
     options: [{ value: '4', label: '4 weeks' }, { value: '8', label: '8 weeks' }],
     onChange: (v) => S.ctx.setQuery({ weeks: v === '8' ? '8' : null }),
   });
-  listen(el, 'click', '.ls-cell[data-date]', (e, td) => openDay(+td.dataset.li, td.dataset.date));
-  listen(el, 'keydown', '.ls-cell[data-date]', (e, td) => {
+  LISTENERS.listen(el, 'click', '.ls-cell[data-date]', (e, td) => openDay(+td.dataset.li, td.dataset.date));
+  LISTENERS.listen(el, 'keydown', '.ls-cell[data-date]', (e, td) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDay(+td.dataset.li, td.dataset.date); }
   });
 }

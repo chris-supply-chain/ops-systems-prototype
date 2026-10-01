@@ -4,7 +4,7 @@
 // and supplier promise dates. Click a gross requirement to peg it to the builds
 // and customer promises behind it. Below: the multi-level BOM, the demand we
 // release to tiers 2-3, and the textbook cases that prove the netting.
-import { html, raw, on, injectStyle } from '../lib/dom.js';
+import { html, raw, listeners, injectStyle } from '../lib/dom.js';
 import { api } from '../lib/api.js';
 import { ui, link } from '../lib/ui.js';
 import { fmt } from '../lib/format.js';
@@ -32,20 +32,11 @@ const LOT_RULE = {
 };
 
 let S = null;
-let OFFS = [];
-
-// #page persists across renders, so every delegated listener is tracked and removed.
-function listen(root, ev, sel, fn) {
-  OFFS.push(on(root, ev, sel, fn));
-}
-
-function cleanup() {
-  OFFS.forEach((off) => off());
-  OFFS = [];
-}
+// The page root persists across renders, so every delegated listener is tracked and removed.
+const LISTENERS = listeners();
 
 export async function render(el, ctx) {
-  cleanup();
+  LISTENERS.clear();
   injectStyle('page-mrp', PAGE_CSS);
   const item = ctx.query.get('item') || undefined;
   const d = await api.get('/api/plan/mrp', { item });
@@ -60,7 +51,7 @@ export async function render(el, ctx) {
 }
 
 export function unmount() {
-  cleanup();
+  LISTENERS.clear();
   S = null;
 }
 
@@ -153,23 +144,23 @@ function draw() {
   drawReceipts(r);
   drawBomControls();
 
-  listen(el, 'click', '[data-pick]', (e, b) => {
+  LISTENERS.listen(el, 'click', '[data-pick]', (e, b) => {
     e.preventDefault();
     S.ctx.setQuery({ item: b.dataset.pick, peg: null });
   });
-  listen(el, 'click', '[data-peg]', (e, td) => openPeg(Number(td.dataset.peg)));
-  listen(el, 'keydown', '[data-peg]', (e, td) => {
+  LISTENERS.listen(el, 'click', '[data-peg]', (e, td) => openPeg(Number(td.dataset.peg)));
+  LISTENERS.listen(el, 'keydown', '[data-peg]', (e, td) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPeg(Number(td.dataset.peg)); }
   });
-  listen(el, 'click', '[data-action=rerun]', (e, b) => rerun(b));
-  listen(el, 'click', '[data-action=runs]', () => openRuns());
-  listen(el, 'click', '[data-mrp-item]', (e, a) => {
+  LISTENERS.listen(el, 'click', '[data-action=rerun]', (e, b) => rerun(b));
+  LISTENERS.listen(el, 'click', '[data-action=runs]', () => openRuns());
+  LISTENERS.listen(el, 'click', '[data-mrp-item]', (e, a) => {
     e.preventDefault();
     S.ctx.setQuery({ item: a.dataset.mrpItem, peg: null });
   });
-  listen(el, 'change', '[data-bom-root]', (e, sel) => { S.bom.item = sel.value; syncBom(); });
-  listen(el, 'change', '[data-bom-date]', (e, inp) => { if (inp.value) { S.bom.date = inp.value; syncBom(); } });
-  listen(el, 'click', '[data-bom-on]', (e, btn) => { S.bom.date = btn.dataset.bomOn; syncBom(); });
+  LISTENERS.listen(el, 'change', '[data-bom-root]', (e, sel) => { S.bom.item = sel.value; syncBom(); });
+  LISTENERS.listen(el, 'change', '[data-bom-date]', (e, inp) => { if (inp.value) { S.bom.date = inp.value; syncBom(); } });
+  LISTENERS.listen(el, 'click', '[data-bom-on]', (e, btn) => { S.bom.date = btn.dataset.bomOn; syncBom(); });
 }
 
 // ---------------------------------------------------------------------------

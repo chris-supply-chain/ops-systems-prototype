@@ -74,7 +74,8 @@ def loop_overview(req):
         for name, what, tables in spec["stages"]:
             stages.append({"name": name, "what": what, "tables": [{"table": t, "rows": _count(c, t)} for t in tables]})
         pending = q(c, "SELECT * FROM decision_log WHERE loop=? AND status='PROPOSED' ORDER BY decision_id", (key,))
-        history = q(c, "SELECT decision_id, title, status, decided_by, executed_at, outcome_json FROM decision_log"
+        history = q(c, "SELECT decision_id, title, status, decided_by, executed_at, impact_json, outcome_json, achieved_json"
+                       " FROM decision_log"
                        " WHERE loop=? AND status!='PROPOSED' ORDER BY COALESCE(executed_at, proposed_at) DESC", (key,))
         loops.append({"key": key, "name": spec["name"], "question": spec["question"], "stages": stages,
                       "pending": [_decision(d) for d in pending], "history": [_decision(d) for d in history]})
@@ -89,7 +90,7 @@ def loop_overview(req):
 
 def _decision(d):
     d = dict(d)
-    for k in ("inputs_json", "impact_json", "outcome_json"):
+    for k in ("inputs_json", "impact_json", "outcome_json", "achieved_json"):
         if d.get(k):
             try:
                 d[k.replace("_json", "")] = json.loads(d[k])

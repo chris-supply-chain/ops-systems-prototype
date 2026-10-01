@@ -27,6 +27,7 @@ app.py           start here: builds the database if it is missing, then serves t
 ops/
   schema.sql     every table, view, index and foreign key (defined nowhere else)
   db.py          the app's database connections, query helpers and the dataset's clock
+  dates.py       date helpers every layer shares: read a stored date, label it, count delivery days
   generate/      the simulator: a mock world and the raw feeds its outside systems send
   ingest/        feed loaders: raw payloads in, the shared core out
   logic/         the rules: planning, parts tracing, decisions, data contracts, evals
@@ -45,11 +46,13 @@ data/            the generated database (not in git)
 - **Adding a page is local.** A page is one file in `web/js/pages/` plus its entries in `PAGES` and `MODULES` in
   `web/js/app.js`, and any API it calls lives in `ops/api/routes/`. Nothing else needs registering: the server loads
   every route file at startup, and the shell won't start if the menu and the pages disagree.
-- **Files open with a header** that says what they hold: all 76 non-empty Python modules, all 31 JavaScript files, the
+- **Files open with a header** that says what they hold: all 79 non-empty Python modules, all 31 JavaScript files, the
   stylesheet and `schema.sql`. Inside, comments give the reason where the code alone doesn't.
 - **The headers are an index for reuse.** Before writing a new function, a person or an AI assistant can read the
   headers to find the module that already does the job, and extend it instead of writing a second copy.
   `docs/CONVENTIONS.md` lists the shared helpers and the pattern every route and page follows.
+- **A test keeps it that way.** `tests/test_codebase.py` fails if a file loses its header, a function goes unused, or a
+  function body is copied into a second file.
 
 ```mermaid
 flowchart LR
@@ -162,17 +165,18 @@ data. The Tests · Evals · Review page shows the latest results and their histo
 
 | Check | What it proves | Sandbox table · columns |
 |---|---|---|
-| **82 tests** | The logic gives the numbers worked out by hand (MRP netting, ATP allocation, parsers, recovery math), and every closed loop closes end to end. | `test_run` · tests, failures, errors, duration_s, detail_json |
-| **6 evals** | Each model's output is scored against the known answer on realistic volume. Below its threshold, the gate fails. | `eval_suite` · metric, threshold<br>`eval_run` · subject_version, score, gate<br>`eval_case` · expected, actual, passed |
+| **93 tests** | The logic gives the numbers worked out by hand (MRP netting, ATP allocation, parsers, recovery math), every closed loop closes end to end, and the code keeps its own rules (headers, no dead or copied functions). | `test_run` · tests, failures, errors, duration_s, detail_json |
+| **6 evals** | Each model's output is scored against the known answer on realistic volume. Below its threshold, the gate fails; below its previous run, the run is marked regressed. | `eval_suite` · metric, threshold<br>`eval_run` · subject_version, score, gate, prev_score, regressed<br>`eval_case` · expected, actual, passed |
 | **21 contracts** | Rules the data must always obey, written as SQL that returns the violating rows. They re-run after each decision, hold release, chargeback step and MRP run. | `data_contract` · check_sql, severity<br>`contract_run` · violations, sample_json |
-| **Change review** | A mapping change is marked deployed only if its tests, evals and contract pass, and the approver is recorded. | `change_review` · test_run_id, eval_run_id, contracts_ok, reviewer, status |
+| **Change review** | A mapping change is marked deployed only if its tests, evals and contract pass and no eval fell since its last run; the approver is recorded. | `change_review` · test_run_id, eval_run_id, contracts_ok, reviewer, status |
 
-**Regression.** Runs are appended, never overwritten, so a falling eval score shows as a trend on the Tests · Evals ·
-Review page, and below its threshold the gate fails (`eval_run.gate`). When an eval caught a parser bug (a ship date
-read as a delivery date), the fix got its own test in `tests/test_parsers.py`. The suite also runs on other dataset
-dates (`OPS_TEST_AS_OF`), and one test rebuilds the world to check that the same seed gives the same data. Nothing yet
-compares a run with the one before it, so a score that falls but stays above its threshold still passes. More in
-[Tests and evals](#tests-and-evals).
+**Regression.** Every eval run is compared with the suite's previous run: `eval_run.prev_score` holds the score it is
+compared with, and `eval_run.regressed` is 1 when the score fell, even if it still clears its threshold. The Tests ·
+Evals · Review page flags the fall, and a mapping change whose evals regressed is not deployed. In the walkthrough's
+data two runs are flagged: the CM's MES cutover (99.96% to 93.25%) and the unmapped S65 rework bay (99.94% to 98.78%).
+When an eval caught a parser bug (a ship date read as a delivery date), the fix got its own test in
+`tests/test_parsers.py`. The suite also runs on other dataset dates (`OPS_TEST_AS_OF`), and one test rebuilds the world
+to check that the same seed gives the same data. More in [Tests and evals](#tests-and-evals).
 
 ### How we measure the value
 
@@ -185,10 +189,11 @@ option, are stored as data too, so they can be checked.
 | **Time a process takes** | The time between two events is charged to the later step, and each step is classed as value, control, glue or wait. Deleting the glue and wait steps gives a projected cycle time. **Process Lab** | `process_event` · case_id, activity, ts, actor_role<br>`process_activity` · category | PO confirmation: 73% of elapsed time is glue or waiting. Deleting it would cut the median cycle of the 60 cases that touch it from 9.1 days to 32.7 hours. |
 | **Manual work** | Human touches per case, and per week for each way of integrating a system. **Process Lab, Integration Hub** | `process_event` · actor_role<br>`integration_option` · touches_per_week, latency_minutes, error_rate_pct, run_usd_month | 7 manual touches a week, down from 59 when buyers re-keyed supplier emails. |
 | **Money recovered** | Chargebacks are priced from claims and quality events under each supplier's terms, and count as recovered once posted to the ERP as debit memos. **Warranty & Chargebacks, ERP Core** | `chargeback` · amount_usd, status<br>`erp_journal_line` · debit_usd, credit_usd | $4,344.00 posted, $7,494.80 more sent or disputed, and D-0105 proposes $9,652.30. |
-| **Impact before a decision** | Each proposed decision states its expected impact before anyone approves it, and exceptions can carry theirs in units and dollars. **Closed Loop, Control Tower** | `decision_log` · impact_json<br>`ops_exception` · impact_units, impact_unit, impact_usd | D-0106: $2,825 of air freight protects 192 packs and 1,636 promises that would otherwise slip. |
+| **Impact of a decision** | Each proposed decision states its expected impact before anyone approves it. Right after it runs, the same figures are counted again from the data and stored beside the expectation, with whether the exception that raised it cleared. Exceptions also carry their impact in units and dollars. **Closed Loop, Control Tower** | `decision_log` · impact_json, achieved_json<br>`ops_exception` · impact_units, impact_unit, impact_usd | D-0106 expects $2,825 of air freight to protect 192 packs and 1,636 promises that would otherwise slip. Counted again after it runs: all 192 and 1,636, and the line-stop exception clears. |
 | **Software spend** | Thin-app telemetry turns real usage into capability weights, and every vendor is re-scored on them instead of on assumed weights. It also shows time on task per feature. **Buy vs Build** | `app_telemetry` · feature, duration_s, outcome<br>`capability` · assumed_weight<br>`vendor` · annual_usd, impl_weeks<br>`vendor_capability` · fit | The ranking flips in all 3 domains: $304K a year and 49 implementation weeks avoided. |
 
-**Value is stated before a decision, booked when money moves, and measured from usage before software is bought.**
+**Value is stated before a decision and counted again after it, booked when money moves, and measured from usage before
+software is bought.**
 
 ## Systems
 
@@ -358,11 +363,12 @@ purpose as the problems the loops and pages are built to show.
 
 The logic is checked three ways, and each catches something the others don't:
 
-- **Tests check the code.** There are 82 `unittest` tests. Unit tests run on tiny hand-built databases with
+- **Tests check the code.** There are 93 `unittest` tests. Unit tests run on tiny hand-built databases with
   hand-computed expectations: MRP netting, ATP allocation, genealogy traces, parsers and recovery math. End-to-end
   tests build the whole simulated world, check its invariants (foreign keys, balanced inventory flows, canonical
   timestamps, same seed gives the same data, row keys), then execute all four decisions on a copy and check that each
-  loop closes.
+  loop closes and achieves what it proposed. A last group checks the code itself: every file keeps its header, and no
+  function is dead or copied into a second file.
 - **Evals check the output against a known answer.** An eval runs a piece of logic on realistic volume and scores
   what it produced against the truth, with a pass threshold. The simulator knows what physically happened, so the CM
   feed normalizer and the recall trace are graded against ground truth, not just checked for running.
@@ -379,12 +385,12 @@ The logic is checked three ways, and each catches something the others don't:
 
 In the canonical data, EV-CM-MES (98.8%) and EV-GENEALOGY (83.8%) fail on purpose, because the CM's new S65 rework
 bay isn't mapped yet. They are two of D-0107's gates. Executing it maps the station and replays the quarantined
-messages, and both reach 100%. Every run is stored (`eval_run`, `eval_case`), and the Tests · Evals · Review page shows
-the trend and each failing case. The same harness is how a replacement would be judged: an LLM symptom classifier,
+messages, and both reach 100%. Every run is stored (`eval_run`, `eval_case`) and compared with the run before it, and
+the Tests · Evals · Review page shows the trend, each fall and each failing case. The same harness is how a replacement would be judged: an LLM symptom classifier,
 for example, would have to beat the rules classifier's score on the same labeled set.
 
-Rule and mapping changes carry a change-review record with their gates (tests, evals, contracts, reviewer). D-0107
-creates one and records it as deployed only if its gates pass; the other records are seeded history.
+Rule and mapping changes carry a change-review record with their gates (tests, evals, no eval regressed, contracts,
+reviewer). D-0107 creates one and records it as deployed only if its gates pass; the other records are seeded history.
 
 ```bash
 python3 -m unittest discover -s tests                        # the full suite, about 15 seconds

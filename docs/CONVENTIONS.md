@@ -9,6 +9,7 @@ no npm, no CDN JS). Everything runs with `python3 app.py`.
 app.py                      CLI: build DB if missing, serve on :8000
 ops/schema.sql              the relational model (source of truth for tables)
 ops/config.py  ops/db.py    paths; connect(), q(), q1(), val(), as_of(), now()
+ops/dates.py                to_date(), month_day(), skip_sundays(), iso(): date helpers every layer shares
 ops/generate/               mock world simulator -> raw_* landing tables + core tables
 ops/ingest/                 normalizers: raw_* -> canonical core (CM MES, ASN, carrier, 3PL, confirmations, warranty)
 ops/logic/                  decision logic: genealogy, mrp, atp, exceptions, actions (closed loop), contracts, reconcile, process, scorecard
@@ -22,6 +23,15 @@ web/js/lib/*.js             dom, api, format, ui, charts, icons
 web/js/pages/<module>.js    one module per page
 tests/test_*.py             unittest; `python3 -m unittest discover -s tests -v`
 ```
+
+## One home per helper
+
+Every file opens with a header saying what it holds; read them before writing a
+helper, and import the one that exists. Shared code lives in `ops/db.py`,
+`ops/dates.py` and `web/js/lib/`. `tests/test_codebase.py` fails if a file has no
+header, a top-level function is never used, or a function body is copied into a
+second file. Each page's `render` and `unmount` are exempt: the page contract
+gives every page its own.
 
 ## The clock
 
@@ -106,7 +116,9 @@ Rules:
   page. Anything bound to `document`, `document.body` or `window` (drawer
   actions, observers, timers) must be removed in `unmount`. Once the user
   navigates away, a page's `ctx.setQuery` does nothing, so a closing drawer
-  can't rewrite the next page's URL.
+  can't rewrite the next page's URL. A page that re-renders into the same
+  element tracks its delegated listeners with `listeners()` from dom.js and
+  clears them in `unmount`.
 - Put every hand-built table inside `<div class="table-wrap">` (`ui.dataTable`
   already does this), so a wide table scrolls inside its card at phone width
   instead of scrolling the page.

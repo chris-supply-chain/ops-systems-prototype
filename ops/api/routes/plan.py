@@ -10,6 +10,7 @@ import math
 import re
 import statistics
 
+from ...dates import month_day, to_date
 from ...db import as_of as get_as_of, now as get_now
 from ...logic import atp as A
 from ...logic import mrp as M
@@ -22,10 +23,6 @@ MSG_RANK = {"SHORTAGE": 0, "PAST_DUE_RELEASE": 1, "EXPEDITE": 2, "BELOW_SAFETY_S
             "RELEASE": 5, "DEFER": 6, "CANCEL": 7}
 MSG_TONE = {"SHORTAGE": "critical", "PAST_DUE_RELEASE": "serious", "EXPEDITE": "serious", "BELOW_SAFETY_STOCK": "warning",
             "UNCONFIRMED": "warning", "RELEASE": "info", "DEFER": "neutral", "CANCEL": "neutral"}
-
-
-def _d(s):
-    return dt.date.fromisoformat(str(s)[:10])
 
 
 def _day(as_of, i):
@@ -47,7 +44,6 @@ def _num(v):
 
 
 _DAY_RE = re.compile(r"\bday (-?\d+)")
-_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
 def _dated(text, as_of):
@@ -57,12 +53,8 @@ def _dated(text, as_of):
 
     def sub(m):
         d = as_of + dt.timedelta(days=int(m.group(1)))
-        return f"{_MON[d.month - 1]} {d.day}"
+        return month_day(d)
     return _DAY_RE.sub(sub, text)
-
-
-def _md(day):
-    return f"{_MON[day.month - 1]} {day.day}"
 
 
 def _messages(res, as_of):
@@ -108,7 +100,7 @@ def _runs(conn, limit=12):
 def mrp_view(req):
     conn = req.conn
     res = M.run(conn)
-    as_of = _d(res["as_of"])
+    as_of = to_date(res["as_of"])
     days = res["days"]
     llc = res["llc"]
     items = {r["item_id"]: r for r in conn.execute(
@@ -225,7 +217,7 @@ def mrp_peg(req):
     if not item or day is None:
         raise HttpError(400, "item and day are required")
     res = M.run(conn)
-    as_of = _d(res["as_of"])
+    as_of = to_date(res["as_of"])
     pegs = res["pegs"].get((item, day), [])
     names = {r["item_id"]: r["name"] for r in conn.execute("SELECT item_id, name FROM item")}
     parents = []
@@ -262,7 +254,7 @@ def mrp_peg(req):
             if hit and oid in info:
                 total_orders += 1
                 o = info[oid]
-                slip = (_d(a["promise"]) - _d(o["promised_date"])).days if a.get("promise") and o["promised_date"] else None
+                slip = (to_date(a["promise"]) - to_date(o["promised_date"])).days if a.get("promise") and o["promised_date"] else None
                 # the binding supply is whichever component of the kit becomes available last
                 bind = max(((sku, pg) for sku, lst in a.get("pegs", {}).items() for pg in lst),
                            key=lambda t: t[1]["available"], default=(None, {}))
@@ -308,11 +300,11 @@ ECO_RE_POS = {"BMS": "ECO-0031", "GASKET": "ECO-0036", "DRIVE_UNIT": "ECO-0042"}
 @get(r"^/api/plan/bom$")
 def bom_view(req):
     conn = req.conn
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     root = req.arg("item", "LV1-SLATE-L")
     on = req.arg("date") or as_of.isoformat()
     try:
-        on_d = _d(on)
+        on_d = to_date(on)
     except ValueError:
         raise HttpError(400, f"bad date {on!r}")
     items = {r["item_id"]: r for r in conn.execute(
@@ -422,7 +414,7 @@ def _rated(caps, site, line, day):
 def mps_view(req):
     from ...generate.util import TW_HOLIDAYS, US_HOLIDAYS
     conn = req.conn
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     start = _week_start(as_of)
     W = 13
     weeks = [start + dt.timedelta(days=7 * k) for k in range(W)]
@@ -447,7 +439,7 @@ def mps_view(req):
     # forecast (latest S&OP), weekly buckets are Monday-based in the table
     for r in conn.execute("SELECT item_id, week_start, qty FROM demand_forecast WHERE version=? AND week_start>=? AND week_start<?",
                           (version, start.isoformat(), end.isoformat())):
-        k = wk(_d(r["week_start"]))
+        k = wk(to_date(r["week_start"]))
         if k is None:
             continue
         if r["item_id"] in kits:
@@ -461,7 +453,7 @@ def mps_view(req):
     for r in conn.execute("""SELECT o.promised_date, o.ship_to_region, COUNT(ol.line_no) AS packs
                              FROM customer_order o JOIN order_line ol ON ol.order_id=o.order_id
                              WHERE o.status='OPEN' AND o.promised_date IS NOT NULL GROUP BY o.order_id"""):
-        ship_by = _back_skip_sundays(_d(r["promised_date"]), A.TRANSIT_MAX.get(r["ship_to_region"], 5))
+        ship_by = _back_skip_sundays(to_date(r["promised_date"]), A.TRANSIT_MAX.get(r["ship_to_region"], 5))
         k = wk(ship_by)
         if ship_by < start:
             past_due["VEH"] += 1
@@ -475,7 +467,7 @@ def mps_view(req):
     mps_sku = {}
     for r in conn.execute("SELECT plan_type, item_id, plan_date, SUM(qty) q FROM build_plan WHERE plan_date>? AND plan_date<?"
                           " GROUP BY plan_type, item_id, plan_date", (as_of.isoformat(), end.isoformat())):
-        k = wk(_d(r["plan_date"]))
+        k = wk(to_date(r["plan_date"]))
         if k is None:
             continue
         key = "VEH" if r["plan_type"] == "CM_COMMIT" else "PACK"
@@ -492,7 +484,7 @@ def mps_view(req):
     horizon_end = as_of + dt.timedelta(days=res["days"])
     for r in conn.execute("SELECT item_id, plan_date, SUM(qty) q FROM build_plan WHERE plan_type='OEM_MPS' AND plan_date>=?"
                           " AND plan_date<? GROUP BY 1, 2", (horizon_end.isoformat(), end.isoformat())):
-        landing = A.next_truck_available(_d(r["plan_date"]))
+        landing = A.next_truck_available(to_date(r["plan_date"]))
         for lots in (ps, ps_full):
             lots.setdefault(r["item_id"], []).append((landing, r["q"], f"Pack MPS {r['plan_date']} (beyond MRP horizon)"))
     on_hand = {"VEH": 0, "PACK": 0}
@@ -529,14 +521,14 @@ def mps_view(req):
     for key, f in FAMILIES.items():
         g = fam[key]
         fz = fence_out[key]
-        dtf = _d(fz["landing_frozen_until"])
+        dtf = to_date(fz["landing_frozen_until"])
         proj, pab, atp_cum, zone = [], [], [], []
         run_pab = 0.0
         cum = []
         c = 0.0
         for k in range(W):
             ws = weeks[k]
-            z = "frozen" if ws < dtf else ("slushy" if ws < _d(fz["landing_slushy_until"]) else "liquid")
+            z = "frozen" if ws < dtf else ("slushy" if ws < to_date(fz["landing_slushy_until"]) else "liquid")
             zone.append(z)
             booked = g["booked"][k] + (past_due[key] if k == 0 else 0)
             demand = booked if z == "frozen" else max(g["forecast"][k], booked)
@@ -559,7 +551,7 @@ def mps_view(req):
     planned = {}
     for r in conn.execute("SELECT site_id, line, plan_date, SUM(qty) q FROM build_plan WHERE plan_date>? AND plan_date<?"
                           " GROUP BY site_id, line, plan_date", (as_of.isoformat(), end.isoformat())):
-        k = wk(_d(r["plan_date"]))
+        k = wk(to_date(r["plan_date"]))
         if k is not None:
             planned[(r["line"], k)] = planned.get((r["line"], k), 0) + r["q"]
     demo = {}
@@ -619,9 +611,9 @@ def mps_view(req):
             byw[r["week_start"]] = r["q"]
         errs = []
         for wsk, q in byw.items():
-            wsd = _d(wsk)
+            wsd = to_date(wsk)
             complete = wsd + dt.timedelta(days=7) <= as_of
-            if complete and wsd >= _d(v["published_at"]) and actual.get(wsd):
+            if complete and wsd >= to_date(v["published_at"]) and actual.get(wsd):
                 errs.append((q, actual[wsd]))
         mape = sum(abs(f - a) / a for f, a in errs) / len(errs) if errs else None
         bias = (sum(f for f, a in errs) - sum(a for f, a in errs)) / sum(a for f, a in errs) if errs else None
@@ -733,7 +725,7 @@ def _ss_calc(stats, pol, site):
 @get(r"^/api/plan/replenishment$")
 def replenishment_view(req):
     conn = req.conn
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     items = {r["item_id"]: r for r in conn.execute(
         "SELECT i.*, s.name AS supplier_name FROM item i LEFT JOIN supplier s ON s.supplier_id=i.primary_supplier_id")}
     sites = {r["site_id"]: r["name"] for r in conn.execute("SELECT site_id, name FROM site")}
@@ -854,7 +846,7 @@ def replenishment_view(req):
                 tally[m["message"]] = tally.get(m["message"], 0) + 1
             summary = " · ".join(f"{n} {k.lower().replace('_', ' ')}" for k, n in
                                  sorted(tally.items(), key=lambda kv: MSG_RANK.get(kv[0], 9)))
-            row["action"] = (f"Runs out {_md(as_of + dt.timedelta(days=r['first_short']))}: see the MRP record"
+            row["action"] = (f"Runs out {month_day(as_of + dt.timedelta(days=r['first_short']))}: see the MRP record"
                              if r and r["first_short"] is not None
                              else (f"MRP messages: {summary}" if summary else "Planned by MRP, no action messages"))
         elif pol == "REORDER_POINT":
@@ -879,7 +871,7 @@ def replenishment_view(req):
             if oh < (p["safety_stock"] or 0):
                 nr = row["next_receipt"]
                 row.update(status="BELOW_MIN", tone="warning",
-                           action=f"Below min {p['safety_stock']:,.0f}: expedite {nr['po_id']}-{nr['line_no']} due {_md(_d(nr['date']))}"
+                           action=f"Below min {p['safety_stock']:,.0f}: expedite {nr['po_id']}-{nr['line_no']} due {month_day(to_date(nr['date']))}"
                            if nr else f"Below min {p['safety_stock']:,.0f}: no open PO")
             elif p["max_qty"] and oh > p["max_qty"]:
                 row.update(status="OVER_MAX", tone="info", action=f"Above max {p['max_qty']:,.0f}: push out the next receipt")

@@ -9,6 +9,7 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from ops.api.router import HttpError, get
+from ops.dates import to_date
 from ops.db import as_of, q
 from ops.logic import mrp as M
 
@@ -28,10 +29,6 @@ HOLIDAYS = {
     "OEM-FRE": {"2026-05-25": "Memorial Day", "2026-07-03": "Independence Day", "2026-09-07": "Labor Day",
                  "2026-11-26": "Thanksgiving", "2026-11-27": "Thanksgiving", "2026-12-25": "Christmas"},
 }
-
-
-def _d(s):
-    return dt.date.fromisoformat(s[:10])
 
 
 def _local_day(ts, tz):
@@ -54,7 +51,7 @@ def _sequence(items):
 @get(r"^/api/schedule/board$")
 def board(req):
     c = req.conn
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     try:
         back = max(0, min(28, int(req.arg("back") or 7)))
         ahead = max(7, min(56, int(req.arg("ahead") or 21)))

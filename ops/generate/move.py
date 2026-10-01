@@ -4,8 +4,9 @@ kitting orders FIFO by priority, and last-mile carriers delivering them.
 import datetime as dt
 from collections import deque
 
+from ..dates import skip_sundays
 from .master import TRANSIT_DAYS
-from .util import PT, TPE, UTC, add_days, at, skip_sundays, week_code
+from .util import PT, TPE, UTC, add_days, at, week_code
 
 VESSELS = ["Pacific Meridian", "Pacific Horizon", "Pacific Lodestar", "Pacific Solstice", "Pacific Tradewind",
            "Pacific Aurora"]

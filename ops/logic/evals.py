@@ -7,8 +7,10 @@
   EV-ATP-BACKTEST    first promise vs actual delivery
   EV-MRP-TEXTBOOK    MRP netting vs hand-computed textbook cases
 
-A suite below its threshold fails its gate. A mapping or rule change cannot be
-marked deployed in change_review with a failing gate.
+A suite below its threshold fails its gate. Every run is also compared with the
+suite's previous run, and a score below it is marked regressed even while it still
+clears the threshold. A mapping or rule change cannot be marked deployed in
+change_review with a failing gate or a regressed eval.
 """
 import datetime as dt
 import json
@@ -193,6 +195,15 @@ SUITE_FN = {"EV-CM-MES": _cm_mes, "EV-GENEALOGY": _genealogy, "EV-WARRANTY-CLS":
             "EV-PROMISE-PARSE": _promise, "EV-ATP-BACKTEST": _atp_backtest, "EV-MRP-TEXTBOOK": _mrp_textbook}
 
 
+def compare_with_last(conn, suite_id, ran_at, score):
+    """The suite's score on its previous run (by time, then run id) and whether `score` fell below it.
+    A drop counts even when both runs pass, so a regression can't hide behind a passing gate."""
+    prev = conn.execute("SELECT score FROM eval_run WHERE suite_id=? AND ran_at<=? ORDER BY ran_at DESC, run_id DESC"
+                        " LIMIT 1", (suite_id, ran_at)).fetchone()
+    prev_score = prev["score"] if prev else None
+    return prev_score, 1 if prev_score is not None and round(score, 4) < prev_score else 0
+
+
 def run_suite(conn, suite_id):
     suite = conn.execute("SELECT * FROM eval_suite WHERE suite_id=?", (suite_id,)).fetchone()
     cases, metrics = SUITE_FN[suite_id](conn)
@@ -204,14 +215,17 @@ def run_suite(conn, suite_id):
     else:
         gate = "PASS" if score >= suite["threshold"] else "FAIL"
     metrics.update({"cases": len(cases), "passed": passed})
-    cur = conn.execute("INSERT INTO eval_run(suite_id, ran_at, subject_version, cases, passed, score, gate, metrics_json)"
-                       " VALUES (?,?,?,?,?,?,?,?)", (suite_id, get_now(conn), VERSIONS[suite_id](conn), len(cases), passed,
-                                                     round(score, 4), gate, json.dumps(metrics)))
+    ran_at = get_now(conn)
+    prev_score, regressed = compare_with_last(conn, suite_id, ran_at, score)
+    cur = conn.execute("INSERT INTO eval_run(suite_id, ran_at, subject_version, cases, passed, score, gate, prev_score,"
+                       " regressed, metrics_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       (suite_id, ran_at, VERSIONS[suite_id](conn), len(cases), passed, round(score, 4), gate, prev_score,
+                        regressed, json.dumps(metrics)))
     run_id = cur.lastrowid
     conn.executemany("INSERT INTO eval_case VALUES (?,?,?,?,?,?,?)",
                      [(run_id, c[0], None, c[1], c[2], 1 if c[3] else 0, c[4]) for c in cases])
-    return {"run_id": run_id, "suite_id": suite_id, "score": score, "gate": gate, "cases": len(cases), "passed": passed,
-            "metrics": metrics}
+    return {"run_id": run_id, "suite_id": suite_id, "score": score, "gate": gate, "prev_score": prev_score,
+            "regressed": bool(regressed), "cases": len(cases), "passed": passed, "metrics": metrics}
 
 
 def run_all(conn):

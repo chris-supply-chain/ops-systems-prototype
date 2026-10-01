@@ -217,11 +217,32 @@ function drawDecision(d, ctx, pageEl) {
   }));
 }
 
+// How a measure reads once it has happened, where that differs from the proposal's wording.
+const ACHIEVED_LABEL = { orders_protected: 'Promises kept from slipping', recovery_estimate_usd: 'Recovery drafted',
+  orders: 'Orders re-promised', messages: 'Messages replayed', as_built_corrections: 'As-built records fixed' };
+
+// Expected impact beside the same figures counted again from the data after execution (decisions.measure).
+function achieved(dec) {
+  const a = dec.achieved;
+  if (!a || !a.figures) return '';
+  const exp = dec.impact || {};
+  const show = (k, v) => (typeof v === 'number' ? (k.endsWith('_usd') ? fmt.usd(v) : fmt.int(v)) : (v ?? '—'));
+  return html`<h4 class="section-title">What it achieved</h4>
+    <p class="small muted">Counted again from the data after it ran, not taken from the code that acted.</p>
+    <table class="table dense pl-writes"><thead><tr><th>Measure</th><th class="num">Expected</th><th class="num">Achieved</th></tr></thead><tbody>
+      ${Object.keys(exp).filter((k) => k in a.figures).map((k) => html`<tr><td>${ACHIEVED_LABEL[k] || IMPACT_LABEL[k] || fmt.title(k)}</td>
+        <td class="num">${show(k, exp[k])}</td><td class="num">${show(k, a.figures[k])}</td></tr>`)}
+    </tbody></table>
+    ${(a.exceptions || []).map((e) => html`<p class="small">Triggering exception <span class="mono">${e.exception_id}</span>:
+      ${e.after && e.after.status === 'RESOLVED' ? ui.chip('good', 'Cleared') : ui.chip('warning', 'Still detected')}
+      <span class="muted">was ${fmt.title(e.before.status)}, now ${e.after ? fmt.title(e.after.status) : 'gone'}</span></p>`)}`;
+}
+
 function outcome(dec, d) {
   const o = dec.outcome || {};
   const w = o.writes || {};
   const gates = o.gates;
-  return html`<h4 class="section-title">What it wrote</h4>
+  return html`${achieved(dec)}<h4 class="section-title">What it wrote</h4>
     ${o.note ? ui.callout({ tone: 'info', title: 'Supply moved between proposal and execution', body: o.note }) : ''}
     ${o.result ? ui.callout({ tone: o.result === 'gap closed' ? 'good' : 'warning', title: `MRP re-run: ${o.result}`,
       body: o.mrp_run_id ? html`Run #${o.mrp_run_id}. ${link.route('mrp?item=BMS-B', 'Open the MRP record')}` : '' }) : ''}

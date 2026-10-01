@@ -13,15 +13,6 @@ US_HOLIDAYS = {dt.date(2026, 5, 25), dt.date(2026, 7, 3), dt.date(2026, 9, 7), d
                dt.date(2026, 11, 27), dt.date(2026, 12, 25)}
 
 
-def iso(t):
-    """Aware datetime -> 'YYYY-MM-DDTHH:MM:SSZ' (UTC)."""
-    return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def parse_iso(s):
-    return dt.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
-
-
 def at(day, hour, minute=0, tz=PT, second=0):
     if isinstance(tz, str):
         tz = ZoneInfo(tz)
@@ -104,13 +95,3 @@ def weighted(rng, pairs):
         if r <= 0:
             return value
     return pairs[-1][0]
-
-
-def skip_sundays(day, n):
-    """Add n delivery days, skipping Sundays (carriers deliver Mon-Sat)."""
-    d = day
-    while n > 0:
-        d += dt.timedelta(days=1)
-        if d.weekday() != 6:
-            n -= 1
-    return d

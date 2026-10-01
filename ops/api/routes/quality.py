@@ -10,6 +10,7 @@ import json
 import re
 
 from ops.api.router import HttpError, get, post
+from ops.dates import to_date
 from ops.db import as_of, now, q, q1, val
 from ops.logic import spc
 from ops.logic.contracts import after_action
@@ -17,10 +18,6 @@ from ops.logic.contracts import after_action
 
 def ts(col):
     return f"strftime('%Y-%m-%dT%H:%M:%SZ', {col})"
-
-
-def _d(s):
-    return dt.date.fromisoformat(s[:10])
 
 
 # ---------------------------------------------------------------------------- shared helpers
@@ -36,7 +33,9 @@ def record_decision(conn, *, loop, rule_id, trigger_ref, title, rationale, actio
     """Every write this page makes is a decision in the audit trail (status EXECUTED, with its writes)."""
     did = next_decision_id(conn)
     t = now(conn)
-    conn.execute("INSERT INTO decision_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    conn.execute("INSERT INTO decision_log(decision_id, loop, rule_id, trigger_ref, title, rationale, inputs_json,"
+                 " proposed_action, impact_json, status, proposed_at, decided_by, executed_at, outcome_json)"
+                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (did, loop, rule_id, trigger_ref, title, rationale, json.dumps(inputs) if inputs else None, action,
                   json.dumps(impact) if impact else None, "EXECUTED", t, decided_by, t, json.dumps(outcome)))
     return did
@@ -89,7 +88,7 @@ def _merge_days(buckets):
 @get(r"^/api/quality/summary$")
 def summary(req):
     c = req.conn
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     since90 = (today - dt.timedelta(days=90)).isoformat()
     iqc = q1(c, f"SELECT COUNT(*) n, SUM(result='ACCEPT') acc, SUM(result='CONDITIONAL') cond, SUM(result='REJECT') rej"
                 f" FROM quality_event WHERE qe_id LIKE 'IQC-%' AND {ts('detected_at')} >= ?", (since90,))
@@ -123,7 +122,7 @@ def summary(req):
         "ncr_open": ncr_open, "capa_open": capa_open,
         "deviations_active": len(devs),
         "next_expiry": ({"id": devs[0]["deviation_id"], "valid_to": devs[0]["valid_to"],
-                         "days": (_d(devs[0]["valid_to"]) - today).days,
+                         "days": (to_date(devs[0]["valid_to"]) - today).days,
                          "left": devs[0]["qty_limit"] - devs[0]["qty_used"]} if devs else None),
         "holds_active": holds, "holds_units": holds_units,
         "counts": {
@@ -218,7 +217,7 @@ def inline(req):
     c = req.conn
     line = (req.arg("line", "ALL") or "ALL").upper()
     days = max(14, min(req.arg("days", 60, int), 150))
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     since = (today - dt.timedelta(days=days)).isoformat()
     lines = None if line == "ALL" else [line]
     buckets = first_pass(c, "CM-TXG", "S60", 8, since, lines)
@@ -313,7 +312,7 @@ def _plan_values(c, cp, since=None):
 @get(r"^/api/quality/capability$")
 def capability(req):
     c = req.conn
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     since = (today - dt.timedelta(days=90)).isoformat()
     plans = q(c, """SELECT cp.*, s.code AS station_code, s.name AS station_name, i.name AS item_name
                     FROM control_plan cp LEFT JOIN station s ON s.station_id = cp.station_id
@@ -347,7 +346,7 @@ def capability_detail(req):
         raise HttpError(404, "no such control plan row")
     if cp["station_id"] is None:
         return {"plan": cp, "points": [], "limits": None, "stats": None, "by_line": []}
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     vals = _plan_values(c, cp, (today - dt.timedelta(days=90)).isoformat())
     recent = vals[-160:]
     lim = spc.imr_limits([r["v"] for r in vals])
@@ -373,7 +372,7 @@ def capability_detail(req):
 @get(r"^/api/quality/deviations$")
 def deviations(req):
     c = req.conn
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     rows = q(c, """SELECT d.*, i.name AS item_name, s.name AS supplier_name, e.title AS eco_title, st.name AS site_name
                    FROM deviation d JOIN item i ON i.item_id = d.item_id
                    LEFT JOIN supplier s ON s.supplier_id = d.supplier_id
@@ -381,7 +380,7 @@ def deviations(req):
                    LEFT JOIN site st ON st.site_id = d.site_id
                    ORDER BY d.valid_to DESC""")
     for d in rows:
-        vf, vt = _d(d["valid_from"]), _d(d["valid_to"])
+        vf, vt = to_date(d["valid_from"]), to_date(d["valid_to"])
         d["days_left"] = (vt - today).days
         d["remaining"] = d["qty_limit"] - d["qty_used"]
         d["effective_status"] = "EXPIRED" if d["status"] == "APPROVED" and vt < today else d["status"]
@@ -412,7 +411,7 @@ def deviations(req):
 @get(r"^/api/quality/ncr$")
 def ncr(req):
     c = req.conn
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     ncrs = q(c, f"""SELECT qe.qe_id, qe.kind, qe.site_id, qe.item_id, i.name AS item_name, qe.lot_id, qe.serial,
                            qe.supplier_id, s.name AS supplier_name, qe.defect_code, dc.description AS defect_desc,
                            qe.qty_inspected AS n, qe.qty_defective AS bad, qe.result, qe.disposition, qe.status,
@@ -430,8 +429,8 @@ def ncr(req):
                      LEFT JOIN quality_event qe ON qe.qe_id = ca.qe_id ORDER BY ca.opened_at DESC""")
     for ca in capas:
         ca["opened_at"], ca["closed_at"] = ca.pop("opened_utc"), ca.pop("closed_utc")
-        ca["overdue"] = ca["status"] != "CLOSED" and _d(ca["due_date"]) < today
-        ca["days_to_due"] = (_d(ca["due_date"]) - today).days
+        ca["overdue"] = ca["status"] != "CLOSED" and to_date(ca["due_date"]) < today
+        ca["days_to_due"] = (to_date(ca["due_date"]) - today).days
     return {"ncrs": ncrs, "capas": capas}
 
 

@@ -153,7 +153,8 @@ day, so Monday's run on CM line 2 finishes 26 minutes past the shift (line 1: 24
 of commit last week.
 
 Execute **D-0106** from the Closed Loop page: 250 boards by air, arriving Sep 29 ($2,825), DEV-0012 extended, MRP
-re-run. Result: **gap closed**.
+re-run. Result: **gap closed**. The drawer's "What it achieved" counts the proposal's figures again from the data: all 192
+packs and 1,636 promises protected, and the line-stop exception cleared.
 
 **In one line:** "A new order can't fix a shortage inside lead time, so MRP flags it as a shortage and the loop pulls in
 existing supply instead."
@@ -174,12 +175,13 @@ Every customer gets a note before they would have noticed."
 
 At the start:
 
-- Tests 82 / 82, recorded by the proof run in "Before you start".
-- Evals 4 of 6. EV-CM-MES (98.8%) and EV-GENEALOGY (83.8%) fail on purpose, because of S65.
+- Tests 93 / 93, recorded by the proof run in "Before you start".
+- Evals 4 of 6. EV-CM-MES (98.8%) and EV-GENEALOGY (83.8%) fail on purpose, because of S65. EV-CM-MES is also marked
+  as having fallen since its last run (99.94% to 98.78%): a drop is flagged even when a score still passes.
 - Contracts 12 of 21 clean.
 
-Execute **D-0107**. Its gates are unit tests, EV-CM-MES ≥ 99.5% (now 100%), EV-GENEALOGY = 100%, and C-GEN-05
-dropping from 3 violations to 0. Change review **CR-0015** is deployed.
+Execute **D-0107**. Its gates are unit tests, EV-CM-MES ≥ 99.5% (now 100%), EV-GENEALOGY = 100%, no eval below its
+last run, and C-GEN-05 dropping from 3 violations to 0. Change review **CR-0015** is deployed.
 
 Afterwards: evals 6 / 6 and contracts 14 / 21. **In one line:** "The 7 still failing are real open problems with owners,
 such as 473 gaskets used past a deviation and a PO priced at a superseded contract price. The loops fix what they own;
@@ -197,8 +199,8 @@ always gives the same data, and a test enforces it.
 **How do you know the numbers are right?**
 There are four layers:
 
-- 82 tests with hand-computed expectations, covering MRP netting, ATP allocation, parsers and recovery math, plus
-  end-to-end runs of every loop.
+- 93 tests with hand-computed expectations, covering MRP netting, ATP allocation, parsers and recovery math, plus
+  end-to-end runs of every loop and checks that keep the code itself free of dead and copied functions.
 - Six evals graded against ground truth the simulator knows.
 - 21 data contracts that run after every action.
 - A review record with its gates for every rule or mapping change.

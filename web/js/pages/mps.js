@@ -4,7 +4,7 @@
 // pipeline, and the pack MPS as MRP constrains it. Around it: time fences, the
 // textbook MPS record with ATP, rough-cut capacity per line, the vehicle/pack
 // balance, and how good the forecast has been.
-import { html, raw, esc, on, injectStyle } from '../lib/dom.js';
+import { html, raw, esc, listeners, injectStyle } from '../lib/dom.js';
 import { api } from '../lib/api.js';
 import { ui, link } from '../lib/ui.js';
 import { fmt } from '../lib/format.js';
@@ -18,19 +18,11 @@ const FAM = {
 const ZONE_LABEL = { frozen: 'Frozen', slushy: 'Slushy', liquid: 'Liquid' };
 
 let S = null;
-let OFFS = [];
-
-function listen(root, ev, sel, fn) {
-  OFFS.push(on(root, ev, sel, fn));
-}
-
-function cleanup() {
-  OFFS.forEach((off) => off());
-  OFFS = [];
-}
+// The page root persists across renders, so every delegated listener is tracked and removed.
+const LISTENERS = listeners();
 
 export async function render(el, ctx) {
-  cleanup();
+  LISTENERS.clear();
   injectStyle('page-mps', PAGE_CSS);
   const d = await api.get('/api/plan/mps');
   const fam = ctx.query.get('family') === 'PACK' ? 'PACK' : 'VEH';
@@ -39,7 +31,7 @@ export async function render(el, ctx) {
 }
 
 export function unmount() {
-  cleanup();
+  LISTENERS.clear();
   S = null;
 }
 

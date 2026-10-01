@@ -8,6 +8,7 @@ import re
 
 from ops.api.router import HttpError, get, post
 from ops.api.routes.quality import outbound, record_decision, ts
+from ops.dates import to_date
 from ops.db import as_of, now, q, q1, val
 from ops.logic.chargeback import BILLABLE, claim_lines, conflict, post_to_erp, terms_for, write_chargeback
 from ops.logic.contracts import after_action
@@ -15,10 +16,6 @@ from ops.logic.exceptions import BASELINE_FLOOR, SIGNAL_RATIO
 from ops.logic.genealogy import field_rate, months_in_service
 
 OPEN_CB = ("DRAFT", "SENT", "ACCEPTED", "DISPUTED")
-
-
-def _d(s):
-    return dt.date.fromisoformat(s[:10])
 
 
 def _claims(c, where="1=1", params=()):
@@ -45,7 +42,7 @@ def _claims(c, where="1=1", params=()):
         r["parts_replaced"] = parts
         r["conflict"] = conflict(r["defect_code"], r["crm_category"], parts)
         r["billable"] = bool(r["supplier_id"] and r["status"] in BILLABLE and not r["chargeback_id"] and not r["conflict"])
-        r["days_in_service"] = ((_d(r["reported_at"]) - _d(r["delivered_at"])).days
+        r["days_in_service"] = ((to_date(r["reported_at"]) - to_date(r["delivered_at"])).days
                                 if r["delivered_at"] and r["reported_at"] else None)
     return rows
 
@@ -67,7 +64,7 @@ def _recovery(c, claim):
 @get(r"^/api/warranty/summary$")
 def summary(req):
     c = req.conn
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     claims = _claims(c)
     valid = [x for x in claims if x["status"] != "REJECTED"]
     d30 = (today - dt.timedelta(days=30)).isoformat()
@@ -134,13 +131,13 @@ def summary(req):
     # weekly claims: capacity fade against everything else
     weeks = {}
     for x in valid:
-        wd = _d(x["reported_at"])
+        wd = to_date(x["reported_at"])
         wk = (wd - dt.timedelta(days=wd.weekday())).isoformat()
         b = weeks.setdefault(wk, {"week": wk, "capfade": 0, "other": 0})
         b["capfade" if x["defect_code"] == "FLD-CAPFADE" else "other"] += 1
     wk_list = []
     if weeks:
-        start = min(_d(k) for k in weeks)
+        start = min(to_date(k) for k in weeks)
         d = start
         while d <= today:
             k = d.isoformat()
@@ -225,7 +222,7 @@ def claim(req):
 @get(r"^/api/warranty/chargebacks$")
 def chargebacks(req):
     c = req.conn
-    today = _d(as_of(c))
+    today = to_date(as_of(c))
     rows = q(c, f"""SELECT cb.chargeback_id, cb.supplier_id, s.name AS supplier_name, cb.basis, cb.title, cb.amount_usd,
                            cb.status, {ts('cb.created_at')} AS created_at, {ts('cb.sent_at')} AS sent_at,
                            {ts('cb.responded_at')} AS responded_at, {ts('cb.posted_at')} AS posted_at, cb.debit_memo_no,
@@ -236,7 +233,7 @@ def chargebacks(req):
     for r in rows:
         terms = terms_for(c, r["supplier_id"])
         r["response_days"] = terms.get("response_days", 21)
-        r["age_days"] = (today - _d(r["sent_at"])).days if r["sent_at"] else None
+        r["age_days"] = (today - to_date(r["sent_at"])).days if r["sent_at"] else None
         r["overdue"] = r["status"] == "SENT" and r["age_days"] is not None and r["age_days"] > r["response_days"]
     return {"chargebacks": rows}
 
@@ -325,7 +322,7 @@ def send(req):
     cb = _bump(c, req.params[0], ("DRAFT",))
     t = now(c)
     terms = terms_for(c, cb["supplier_id"])
-    due = (_d(t) + dt.timedelta(days=terms.get("response_days", 21))).isoformat()
+    due = (to_date(t) + dt.timedelta(days=terms.get("response_days", 21))).isoformat()
     c.execute("UPDATE chargeback SET status = 'SENT', sent_at = ? WHERE chargeback_id = ?", (t, cb["chargeback_id"]))
     did = record_decision(
         c, loop="QUALITY", rule_id="QUALITY-RECOVERY-SEND", trigger_ref=cb["chargeback_id"],

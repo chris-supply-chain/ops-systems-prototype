@@ -3,6 +3,7 @@ decisions waiting on a human."""
 import datetime as dt
 
 from ops.api.router import get
+from ops.dates import to_date
 from ops.db import as_of, now, q, q1, val
 
 
@@ -10,14 +11,10 @@ def _containers(n):
     return f"{n} container" + ("" if n == 1 else "s")
 
 
-def _day(s):
-    return dt.date.fromisoformat(s[:10])
-
-
 @get(r"^/api/tower$")
 def tower(req):
     c = req.conn
-    today = _day(as_of(c))
+    today = to_date(as_of(c))
     now_s = now(c)
     d7 = (today - dt.timedelta(days=7)).isoformat()
     d30 = (today - dt.timedelta(days=30)).isoformat()

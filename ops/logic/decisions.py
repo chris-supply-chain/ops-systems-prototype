@@ -5,12 +5,15 @@ used and the expected impact. `execute` carries a decision out as real writes:
 holds, PO changes, promise updates, a new mapping version, chargebacks, journal
 entries, and an outbound message for every other system that has to hear about
 it. Each execution records exactly which rows it wrote, so the audit trail is
-queryable in the Data Sandbox. A change to logic or mappings goes through the
+queryable in the Data Sandbox. Then `measure` counts every expected-impact figure
+again from the data, and checks whether the exceptions that triggered the decision
+cleared, so expected and achieved sit side by side in decision_log. A change to logic or mappings goes through the
 same gate as a code change: tests, evals, contracts, then review.
 """
 import datetime as dt
 import json
 
+from ..dates import to_date
 from ..db import as_of as get_as_of, now as get_now
 
 
@@ -24,20 +27,15 @@ def _exists(conn, rule, ref):
                         (rule, ref)).fetchone()
 
 
-def _insert(conn, loop, rule, ref, title, rationale, inputs, action, impact):
+def _insert(conn, loop, rule, ref, title, rationale, inputs, action, impact, exception_id):
     did = _next_id(conn)
     conn.execute("INSERT INTO decision_log(decision_id, loop, rule_id, trigger_ref, title, rationale, inputs_json,"
                  " proposed_action, impact_json, status, proposed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                  (did, loop, rule, ref, title, rationale, json.dumps(inputs), action, json.dumps(impact), "PROPOSED",
                   get_now(conn)))
-    conn.execute("UPDATE ops_exception SET decision_id=? WHERE rule_id=? AND ref_id=? AND status!='RESOLVED'",
-                 (did, _exc_rule(rule), ref))
+    # link the exact exception that raised it: its ref need not match the decision's (DATA's names the feed)
+    conn.execute("UPDATE ops_exception SET decision_id=? WHERE exception_id=? AND status!='RESOLVED'", (did, exception_id))
     return did
-
-
-def _exc_rule(rule):
-    return {"QUALITY-LOT-CLUSTER": "QUALITY-LOT-CLUSTER", "PROMISE-SUPPLY-DELAY": "PROMISE-AT-RISK",
-            "SUPPLY-LINE-STOP": "PLAN-LINE-STOP", "DATA-UNMAPPED-STATION": "DATA-QUARANTINE"}.get(rule, rule)
 
 
 # ============================================================================ propose
@@ -110,7 +108,7 @@ def propose(conn):
                  "serial_holds": len(affected) + len(companions), "lot_holds": len(sc["lots"]),
                  "customers_exposed": sc["with_customer"],
                  "recovery_estimate_usd": round(sum(x[3] for x in claim_lines(conn, "KES", _recoverable(conn, sc)))
-                                                + 12.0 * sc["in_control"], 2)}))
+                                                + 12.0 * sc["in_control"], 2)}, exception_id=e["exception_id"]))
         elif rule == "PROMISE-AT-RISK" and not _exists(conn, "PROMISE-SUPPLY-DELAY", "at_risk"):
             risk = at_risk(conn)
             if not risk:
@@ -129,7 +127,7 @@ def propose(conn):
                 {"orders": len(risk), "avg_slip_days": round(avg, 1), "by_source": by_src},
                 "Update promised dates to the new ATP dates (order_promise, reason SUPPLY_DELAY); queue a customer "
                 "notification per order; leave the original promise on record for on-time reporting.",
-                {"orders": len(risk), "max_slip_days": max(r["slip_days"] for r in risk)}))
+                {"orders": len(risk), "max_slip_days": max(r["slip_days"] for r in risk)}, exception_id=e["exception_id"]))
         elif rule == "PLAN-LINE-STOP" and e["ref_id"] == "BMS-B" and not _exists(conn, "SUPPLY-LINE-STOP", "BMS-B"):
             plan = expedite_plan(conn)
             if not plan:
@@ -145,7 +143,7 @@ def propose(conn):
                 f"(${plan['air_usd']:,.0f} freight), balance on the current promise; extend DEV-0012 by 7 days for the "
                 f"remaining rev-A allowance; re-run MRP to confirm the gap closes.",
                 {"packs_protected": plan["packs_lost"], "air_freight_usd": plan["air_usd"],
-                 "orders_protected": plan["orders_hit"]}))
+                 "orders_protected": plan["orders_hit"]}, exception_id=e["exception_id"]))
         elif rule == "DATA-QUARANTINE" and not _exists(conn, "DATA-UNMAPPED-STATION", "S65"):
             q = conn.execute("SELECT COUNT(*) n FROM raw_cm_mes_event WHERE ingest_status='QUARANTINED'"
                              " AND ingest_note LIKE 'unknown station S65%'").fetchone()["n"]
@@ -164,7 +162,7 @@ def propose(conn):
                 "Add stations TXG-L1-S65 and TXG-L2-S65 (REWORK), publish CM_MES mapping v2.1, replay the quarantine; "
                 "gate: unit tests, evals EV-CM-MES and EV-GENEALOGY and contract C-GEN-05 must pass before the change is "
                 "marked deployed.",
-                {"messages": q, "as_built_corrections": wrong}))
+                {"messages": q, "as_built_corrections": wrong}, exception_id=e["exception_id"]))
     return made
 
 
@@ -215,6 +213,7 @@ def execute(conn, decision_id, actor="Ops lead"):
         raise ValueError(f"{decision_id} is {d['status']}, not PROPOSED")
     fn = {"QUALITY-LOT-CLUSTER": _contain_lot, "PROMISE-SUPPLY-DELAY": _repromise, "SUPPLY-LINE-STOP": _expedite,
           "DATA-UNMAPPED-STATION": _map_station}[d["rule_id"]]
+    triggers = _trigger_state(conn, decision_id)
     conn.execute("SAVEPOINT exec_decision")
     try:
         outcome = fn(conn, d, actor)
@@ -232,8 +231,10 @@ def execute(conn, decision_id, actor="Ops lead"):
         conn.execute("UPDATE ops_exception SET status='ACKNOWLEDGED' WHERE decision_id=? AND status='OPEN'", (decision_id,))
     from . import contracts, exceptions
     exceptions.detect(conn)
+    achieved = measure(conn, d, triggers)
+    conn.execute("UPDATE decision_log SET achieved_json=? WHERE decision_id=?", (json.dumps(achieved), decision_id))
     contracts.after_action(conn)
-    return {"decision_id": decision_id, "status": status, **outcome}
+    return {"decision_id": decision_id, "status": status, **outcome, "achieved": achieved}
 
 
 def _out(conn, target, mtype, ref, payload, decision_id, status="SENT"):
@@ -418,8 +419,8 @@ def _map_station(conn, d, actor):
                  (cr_id, "CM MES mapping v2.1: map rework bay S65", "ops.ingest.cm_mes", "MAPPING",
                   "Closed-loop proposal (reviewed by ops)", now,
                   "station master +2 rows (TXG-L1/L2-S65, REWORK); mapping_version v2.1 adds S65 -> S65; replay quarantine",
-                  json.dumps(["unit tests", "EV-CM-MES >= 99.5%", "EV-GENEALOGY = 100%", "C-GEN-05 clean",
-                              "reviewer approval"]), "OPEN", did))
+                  json.dumps(["unit tests", "EV-CM-MES >= 99.5%", "EV-GENEALOGY = 100%", "no eval below its last run",
+                              "C-GEN-05 clean", "reviewer approval"]), "OPEN", did))
     run = Run(conn, "CM_MES", now, "v2.1")
     mes = CmMes(conn, run)
     replayed = 0
@@ -436,7 +437,7 @@ def _map_station(conn, d, actor):
     ev_gen = run_suite(conn, "EV-GENEALOGY")          # the replay heals the as-built record the recall trace reads
     tests = conn.execute("SELECT run_id, failures, errors FROM test_run ORDER BY run_id DESC LIMIT 1").fetchone()
     gates = {"contract_C-GEN-05": after == 0, "eval_EV-CM-MES": ev["gate"] == "PASS",
-             "eval_EV-GENEALOGY": ev_gen["gate"] == "PASS",
+             "eval_EV-GENEALOGY": ev_gen["gate"] == "PASS", "no_eval_regressed": not (ev["regressed"] or ev_gen["regressed"]),
              "tests": bool(tests) and tests["failures"] == 0 and tests["errors"] == 0}
     ok = all(gates.values())
     conn.execute("UPDATE change_review SET eval_run_id=?, test_run_id=?, contracts_ok=?, reviewer=?, status=?, decided_at=?,"
@@ -451,3 +452,77 @@ def _map_station(conn, d, actor):
             "eval_score": ev["score"], "change_review": cr_id,
             "writes": {"station": 2, "mapping_version": 1, "station_event": replayed, "genealogy": "as-built corrected",
                        "change_review": 1, "outbound_message": 1 if ok else 0}}
+
+
+# ============================================================================ measure
+
+def _trigger_state(conn, decision_id):
+    """The exceptions a decision answers, with their status and impact as they stand now."""
+    return {r["exception_id"]: {"status": r["status"], "impact_units": r["impact_units"], "impact_unit": r["impact_unit"],
+                                "impact_usd": r["impact_usd"]}
+            for r in conn.execute("SELECT exception_id, status, impact_units, impact_unit, impact_usd FROM ops_exception"
+                                  " WHERE decision_id=? ORDER BY exception_id", (decision_id,))}
+
+
+def measure(conn, d, before):
+    """What a decision achieved, counted again from the data after it ran rather than taken from the code that acted:
+    every figure in its impact_json, plus each triggering exception's state before and after re-detection."""
+    after = _trigger_state(conn, d["decision_id"])
+    return {"measured_at": get_now(conn), "figures": MEASURE[d["rule_id"]](conn, d),
+            "exceptions": [{"exception_id": k, "before": v, "after": after.get(k)} for k, v in before.items()]}
+
+
+def _held(conn, serials):
+    serials, held = list(serials), set()
+    for i in range(0, len(serials), 500):
+        chunk = serials[i:i + 500]
+        held |= {r["serial"] for r in conn.execute(
+            f"SELECT serial FROM unit WHERE on_hold=1 AND serial IN ({','.join('?' * len(chunk))})", chunk)}
+    return held
+
+
+def _measure_containment(conn, d):
+    from .genealogy import recall_scope
+    did = d["decision_id"]
+    sc = recall_scope(conn, json.loads(d["inputs_json"] or "{}").get("scope_ref") or d["trigger_ref"])
+    affected = {u["serial"] for u in sc["in_control_units"]}
+    companions = {c for u in sc["in_control_units"] if u["kind"] == "VEHICLE"
+                  for c in _kit_companions(conn, u["serial"])} - affected
+    held = _held(conn, affected | companions)
+    holds = {r["scope_type"]: r["n"] for r in conn.execute(
+        "SELECT scope_type, COUNT(*) n FROM hold WHERE decision_id=? AND released_at IS NULL GROUP BY scope_type", (did,))}
+    drafted = conn.execute("SELECT COALESCE(SUM(amount_usd), 0) s FROM chargeback WHERE decision_id=?", (did,)).fetchone()["s"]
+    return {"hold_units": len(held & affected), "kit_companions": len(held & companions),
+            "serial_holds": holds.get("SERIAL", 0), "lot_holds": holds.get("LOT", 0),
+            "customers_exposed": sc["with_customer"], "recovery_estimate_usd": round(drafted, 2)}
+
+
+def _measure_repromise(conn, d):
+    did = d["decision_id"]
+    slips = [(to_date(p["new"]) - to_date(p["old"])).days for p in (json.loads(r["payload"]) for r in conn.execute(
+        "SELECT payload FROM outbound_message WHERE decision_id=? AND message_type='PROMISE_UPDATE'", (did,)))]
+    return {"orders": conn.execute("SELECT COUNT(*) n FROM order_promise WHERE decision_id=?", (did,)).fetchone()["n"],
+            "max_slip_days": max(slips) if slips else 0}
+
+
+def _measure_expedite(conn, d):
+    expected = json.loads(d["impact_json"] or "{}")
+    left = expedite_plan(conn)               # the check that raised the decision: None once the gap is closed
+    booked = sum(json.loads(r["payload"]).get("est_usd", 0) for r in conn.execute(
+        "SELECT payload FROM outbound_message WHERE decision_id=? AND message_type='AIR_BOOKING'", (d["decision_id"],)))
+    return {"packs_protected": max(0, expected.get("packs_protected", 0) - (left["packs_lost"] if left else 0)),
+            "air_freight_usd": booked,
+            "orders_protected": max(0, expected.get("orders_protected", 0) - (left["orders_hit"] if left else 0))}
+
+
+def _measure_mapping(conn, d):
+    from .contracts import run_one
+    expected = json.loads(d["impact_json"] or "{}")
+    still_quarantined = conn.execute("SELECT COUNT(*) n FROM raw_cm_mes_event WHERE ingest_status='QUARANTINED'"
+                                     " AND ingest_note LIKE 'unknown station S65%'").fetchone()["n"]
+    return {"messages": max(0, expected.get("messages", 0) - still_quarantined),
+            "as_built_corrections": max(0, expected.get("as_built_corrections", 0) - run_one(conn, "C-GEN-05")["violations"])}
+
+
+MEASURE = {"QUALITY-LOT-CLUSTER": _measure_containment, "PROMISE-SUPPLY-DELAY": _measure_repromise,
+           "SUPPLY-LINE-STOP": _measure_expedite, "DATA-UNMAPPED-STATION": _measure_mapping}

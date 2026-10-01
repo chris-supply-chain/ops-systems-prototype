@@ -9,10 +9,6 @@ UTC = dt.timezone.utc
 STATUS_RANK = {"WIP": 0, "BUILT": 1, "IN_TRANSIT": 2, "AT_3PL": 3, "ALLOCATED": 4, "SHIPPED": 5, "DELIVERED": 6}
 
 
-def iso(t):
-    return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def parse_iso(s):
     """Accepts '...Z', '+08:00' offsets, or naive (treated as UTC)."""
     s = s.strip()

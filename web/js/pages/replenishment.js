@@ -3,7 +3,7 @@
 // consignment). The page shows the position against its levels and the action it
 // implies, the OEM-owned stock sitting at the CM in Taiwan, the stock suppliers
 // hold for us, and a safety-stock calculator built on actual consumption.
-import { html, on, injectStyle } from '../lib/dom.js';
+import { html, listeners, injectStyle } from '../lib/dom.js';
 import { api } from '../lib/api.js';
 import { ui, link } from '../lib/ui.js';
 import { fmt } from '../lib/format.js';
@@ -21,19 +21,11 @@ const STATUS_LABEL = {
 };
 
 let S = null;
-let OFFS = [];
-
-function listen(root, ev, sel, fn) {
-  OFFS.push(on(root, ev, sel, fn));
-}
-
-function cleanup() {
-  OFFS.forEach((off) => off());
-  OFFS = [];
-}
+// The page root persists across renders, so every delegated listener is tracked and removed.
+const LISTENERS = listeners();
 
 export async function render(el, ctx) {
-  cleanup();
+  LISTENERS.clear();
   injectStyle('page-replenishment', PAGE_CSS);
   const d = await api.get('/api/plan/replenishment');
   const withCalc = d.rows.filter((r) => r.ss_calc);
@@ -44,7 +36,7 @@ export async function render(el, ctx) {
 }
 
 export function unmount() {
-  cleanup();
+  LISTENERS.clear();
   S = null;
 }
 
@@ -129,7 +121,7 @@ function draw() {
   drawSsRows();
   drawCalc();
   drawDos();
-  listen(el, 'input', '[data-sl]', (e, inp) => {
+  LISTENERS.listen(el, 'input', '[data-sl]', (e, inp) => {
     S.sl = Number(inp.value) / 1000;
     drawCalc(true);
   });

@@ -57,8 +57,9 @@ async function draw(el) {
         ${gate('Tests', 'flask', t ? `${t.tests - t.failures - t.errors} / ${t.tests}` : '—', t ? (t.failures + t.errors ? 'critical' : 'good') : 'neutral',
           t ? `passing · ${fmt.rel(t.ran_at)} · ${t.duration_s}s` : 'never run', 'Unit tests with hand-computed expectations, plus end-to-end runs of every closed loop.',
           html`<button class="btn sm" data-run="tests">${icon('play', 14)}<span>Run tests</span></button>`)}
-        ${gate('Evals', 'target', `${s.evals_pass} / ${s.evals_total}`, s.evals_pass === s.evals_total ? 'good' : 'warning',
-          'suites at or above threshold', 'Each model (normalizer, classifier, parser, ATP, MRP) scored against golden truth.',
+        ${gate('Evals', 'target', `${s.evals_pass} / ${s.evals_total}`, s.evals_pass === s.evals_total && !s.evals_regressed ? 'good' : 'warning',
+          `suites at or above threshold${s.evals_regressed ? ` · ${s.evals_regressed} fell since the last run` : ''}`,
+          'Each model (normalizer, classifier, parser, ATP, MRP) scored against golden truth, and against its own last run.',
           html`<button class="btn sm" data-run="evals">${icon('play', 14)}<span>Run evals</span></button>`)}
         ${gate('Contracts', 'checklist', `${s.contracts_total - s.contracts_failing} / ${s.contracts_total}`, s.contracts_failing ? 'warning' : 'good',
           'clean', 'SQL invariants over landing, core and action layers; violations are the planted story problems.',
@@ -73,8 +74,8 @@ async function draw(el) {
         body: html`<ol class="pf-method">
           <li><b>Contracts</b> say what must always be true of the data (genealogy complete, promises dated, journals balanced). They run after every ingest and every closed-loop action. <span class="mono">ops/logic/contracts.py</span></li>
           <li><b>Tests</b> pin the logic to numbers worked out by hand: MRP records, ATP allocation rules, parser edge cases, recovery math. A regression the eval caught (ship date read as delivery date) now has its own test. <span class="mono">tests/</span></li>
-          <li><b>Evals</b> score each model on realistic volume against truth. The simulator knows what physically happened, so the normalizer, trace, classifier and parser are graded, not just run. <span class="mono">ops/logic/evals.py</span></li>
-          <li><b>Review</b> ties a change to its evidence (test run, eval run, contract result) and a named approver. The closed loop cannot deploy a mapping change that fails a gate. <span class="mono">change_review</span></li>
+          <li><b>Evals</b> score each model on realistic volume against truth. The simulator knows what physically happened, so the normalizer, trace, classifier and parser are graded, not just run. Every run is also compared with the one before it, so a drop is flagged even while the score still passes. <span class="mono">ops/logic/evals.py</span></li>
+          <li><b>Review</b> ties a change to its evidence (test run, eval run, contract result) and a named approver. The closed loop cannot deploy a mapping change that fails a gate or makes an eval worse. <span class="mono">change_review</span></li>
         </ol>`,
       })}
 
@@ -101,6 +102,8 @@ async function draw(el) {
       { key: 'gate', label: 'Gate', value: (r) => (r.latest ? r.latest.gate : ''), render: (r) => html`<div class="pf-suite">
         ${r.latest ? ui.chip(r.latest.gate === 'PASS' ? 'good' : 'critical', r.latest.gate === 'PASS' ? 'Pass' : 'Fail') : '—'}
         <span class="tiny muted">${r.metric} ≥ ${fmt.pct(r.threshold, 1)} · ${r.latest ? fmt.int(r.latest.cases) : 0} cases</span></div>` },
+      { key: 'vs_last', label: 'Vs last run', num: true,
+        value: (r) => (r.latest && r.latest.prev_score != null ? r.latest.score - r.latest.prev_score : null), render: (r) => vsLast(r.latest) },
       { key: 'trend', label: 'Trend', sortable: false, render: (r) => charts.sparkline(r.history.map((h) => h.score)) },
     ],
   });
@@ -117,6 +120,14 @@ async function draw(el) {
       { key: 'status', label: 'Status', render: (r) => html`<div class="pf-suite">${ui.statusChip(r.status)}<span class="tiny muted">${r.reviewer || ''}</span></div>` },
     ],
   });
+}
+
+// A run against the one before it. A fall is flagged even when both runs clear the threshold.
+function vsLast(run) {
+  if (!run || run.prev_score == null) return html`<span class="tiny muted">first run</span>`;
+  const pts = (run.score - run.prev_score) * 100;
+  if (run.regressed) return ui.chip('serious', `Fell ${fmt.num(-pts, 1)} pts`);
+  return html`<span class="small muted">${run.score > run.prev_score ? `▲ ${fmt.num(pts, 1)} pts` : 'No change'}</span>`;
 }
 
 function gate(title, ic, value, tone, sub, blurb, actions) {
@@ -157,9 +168,11 @@ async function openEval(runId) {
   const conf = m.confusion ? Object.entries(m.confusion).sort((a, b) => b[1] - a[1]) : null;
   ui.drawer.open({
     title: `${r.suite_id} · ${r.name}`,
-    subtitle: html`${fmt.dt(r.ran_at)} · version <span class="mono">${r.subject_version}</span> · ${r.passed}/${r.cases} cases · ${fmt.pct(r.score, 2)} · ${r.gate}`,
+    subtitle: html`${fmt.dt(r.ran_at)} · version <span class="mono">${r.subject_version}</span> · ${r.passed}/${r.cases} cases · ${fmt.pct(r.score, 2)} · ${r.gate}${r.prev_score != null ? ` · last run ${fmt.pct(r.prev_score, 2)}` : ''}`,
     width: 760,
-    body: html`<p class="small">${r.description}</p>
+    body: html`${r.regressed ? ui.callout({ tone: 'warning', title: 'Regressed since the last run',
+        body: `Scored ${fmt.pct(r.score, 2)}, below the previous run's ${fmt.pct(r.prev_score, 2)}. A fall is flagged whether or not the gate passes.` }) : ''}
+      <p class="small">${r.description}</p>
       ${m.precision != null ? html`<div class="pf-ev">${ui.chip(m.precision >= 1 ? 'good' : 'critical', `precision ${fmt.pct(m.precision, 1)}`)}
         ${ui.chip(m.coverage >= 0.8 ? 'good' : 'warning', `coverage ${fmt.pct(m.coverage, 1)}`)} ${ui.chip('neutral', `abstained correctly ${m.abstain_correct}`)}</div>` : ''}
       ${conf ? html`<h4 class="section-title">Confusion (truth → predicted)</h4><table class="table dense"><tbody>${conf.map(([k, v]) => {
@@ -226,7 +239,7 @@ const PAGE_CSS = `
 .pf-t { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
 .pf-msg { color: var(--critical); width: 100%; }
 .pf-cases { max-height: 460px; }
-.pf-cell { max-width: 260px; word-break: break-word; }
+.table td.pf-cell { max-width: 260px; white-space: normal; overflow-wrap: anywhere; }
 .pf-note { color: var(--serious); font-family: var(--font-ui); }
 tr.pf-bad td { background: color-mix(in srgb, var(--critical) 7%, transparent); }
 .pf-kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; margin: 0 0 8px; font-size: 13px; }

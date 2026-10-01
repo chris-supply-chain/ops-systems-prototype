@@ -7,7 +7,8 @@ consumed FIFO. That consumption becomes the lot side of the pack genealogy.
 """
 import datetime as dt
 
-from .util import PT, TPE, UTC, add_days, at, iso, yymm
+from ..dates import iso
+from .util import PT, TPE, UTC, add_days, at, yymm
 
 LOT_PLAN = {
     # item: (lot prefix, supplier, weekday, interval days, cover days, max lot qty, mfg lag days, iqc hours)

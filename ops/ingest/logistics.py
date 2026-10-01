@@ -1,7 +1,8 @@
 """3PL WMS feed and carrier feeds (ocean EDI 315, DG truck API, last-mile APIs)."""
 import json
 
-from .common import Run, bump_status, iso, parse_iso
+from ..dates import iso
+from .common import Run, bump_status, parse_iso
 
 EDI315_CODES = {"I": "GATE_IN", "AE": "LOADED", "VD": "DEPARTED", "VA": "ARRIVED", "UV": "DISCHARGED",
                 "CT": "CUSTOMS_RELEASED", "OA": "OUT_GATE"}

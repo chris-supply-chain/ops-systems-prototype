@@ -869,7 +869,9 @@ CREATE TABLE decision_log (
   proposed_at     TEXT NOT NULL,
   decided_by      TEXT,
   executed_at     TEXT,
-  outcome_json    TEXT
+  outcome_json    TEXT,                 -- the rows the execution wrote
+  achieved_json   TEXT                  -- re-measured from the data right after execution: each impact_json
+                                        -- figure as it now stands, and whether the triggering exception cleared
 );
 
 CREATE TABLE hold (
@@ -1220,6 +1222,8 @@ CREATE TABLE eval_run (
   passed          INTEGER NOT NULL,
   score           REAL NOT NULL,
   gate            TEXT NOT NULL CHECK (gate IN ('PASS','FAIL')),
+  prev_score      REAL,                     -- the suite's score on its previous run (NULL on its first)
+  regressed       INTEGER NOT NULL DEFAULT 0 CHECK (regressed IN (0,1)),  -- score fell below prev_score
   metrics_json    TEXT
 );
 

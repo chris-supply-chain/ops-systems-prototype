@@ -11,6 +11,7 @@ import os
 import threading
 
 from ... import config
+from ...dates import month_day, to_date
 from ...db import as_of as get_as_of, now as get_now
 from ...logic import atp, mrp, promises
 from ..router import HttpError, get, post
@@ -18,14 +19,6 @@ from ..router import HttpError, get, post
 REGIONS = ["WEST", "MOUNTAIN", "CENTRAL", "EAST"]
 _CACHE = {"key": None, "val": None}
 _LOCK = threading.Lock()
-
-
-def _d(s):
-    return dt.date.fromisoformat(str(s)[:10])
-
-
-def _md(d):
-    return f"{d:%b} {d.day}"
 
 
 def _wmd(d):
@@ -63,7 +56,7 @@ def _kits(conn):
 
 
 def _compute(conn):
-    as_of = _d(get_as_of(conn))
+    as_of = to_date(get_as_of(conn))
     plan = mrp.run(conn)
     cons = mrp.constrained_pack_plan(conn, plan)
     v = atp.vehicle_supply(conn)
@@ -103,7 +96,7 @@ def _source_kind(src):
 
 
 def _describe(src, available):
-    av = _md(_d(available))
+    av = month_day(available)
     kind = _source_kind(src)
     if kind == "STOCK":
         return "in stock at the 3PL in Reno"
@@ -111,7 +104,7 @@ def _describe(src, available):
         cid, sailing = (src.split(" · ") + [""])[:2]
         return f"on container {cid} ({sailing}), kit-able in Reno {av}"
     if kind == "CM_BUILD":
-        return f"the CM's committed build on {_md(_d(src[9:]))} in Taichung, next sailing, in Reno {av}"
+        return f"the CM's committed build on {month_day(src[9:])} in Taichung, next sailing, in Reno {av}"
     if kind == "CM_FG":
         return f"{'built' if 'finished' in src else 'in WIP'} at the CM, waiting for the next sailing, in Reno {av}"
     if kind == "TRUCK":
@@ -119,7 +112,7 @@ def _describe(src, available):
     if kind == "PLANT":
         return f"{'built' if 'stock' in src else 'in WIP'} at Fremont, on the next DG truck, in Reno {av}"
     if kind == "PACK_MPS":
-        return f"the pack line's build on {_md(_d(src[9:]))} (MPS after MRP constraints), in Reno {av}"
+        return f"the pack line's build on {month_day(src[9:])} (MPS after MRP constraints), in Reno {av}"
     return src
 
 
@@ -128,12 +121,12 @@ def _explain(as_of, r, vehicle_sku, pack_skus, region):
     if not r or not r.get("ship_date"):
         return {"ship_date": None, "promise": None, "days_out": None, "binding": "beyond horizon", "pegs": [],
                 "text": "No supply inside the 180-day horizon."}
-    ship = _d(r["ship_date"])
+    ship = to_date(r["ship_date"])
     pegs = []
     latest = None
     for sku, lst in (r.get("pegs") or {}).items():
         for pg in lst:
-            av = _d(pg["available"])
+            av = to_date(pg["available"])
             role = "vehicle" if sku == vehicle_sku else "pack"
             pegs.append({"sku": sku, "role": role, "source": pg["source"], "kind": _source_kind(pg["source"]),
                          "available": pg["available"], "text": _describe(pg["source"], pg["available"])})
@@ -142,11 +135,11 @@ def _explain(as_of, r, vehicle_sku, pack_skus, region):
     if latest and latest[0] < ship:
         binding = "kitting capacity"
     elif latest:
-        roles = {pg["role"] for pg in pegs if _d(pg["available"]) == latest[0]}
+        roles = {pg["role"] for pg in pegs if to_date(pg["available"]) == latest[0]}
         binding = "vehicle and pack" if len(roles) > 1 else latest[1]
     else:
         binding = "—"
-    promise = _d(r["promise"])
+    promise = to_date(r["promise"])
     carrier = (promise - ship).days
     head = (f"Ships {_wmd(ship)} from Reno and arrives by {_wmd(promise)} "
             f"({region.title()}: {carrier} calendar days with the carrier). ")
@@ -168,7 +161,7 @@ def _containers(conn):
                              FROM shipment s LEFT JOIN customs_entry ce ON ce.shipment_id = s.shipment_id
                              WHERE s.leg = 'CM_TO_3PL' AND s.received_at IS NULL"""):
         r = dict(r)
-        r["delay_days"] = ((_d(r["eta_current"]) - _d(r["eta_planned"])).days
+        r["delay_days"] = ((to_date(r["eta_current"]) - to_date(r["eta_planned"])).days
                            if r["eta_current"] and r["eta_planned"] else 0)
         out[r["shipment_id"]] = r
     return out
@@ -200,10 +193,10 @@ def _pipeline(st, containers):
                             row["note"] = "CBP exam: +4 days to release"
                         elif ct["delay_days"] > 0:
                             row["note"] = (f"ETA +{ct['delay_days']}d vs plan "
-                                           f"({_md(_d(ct['eta_planned']))} → {_md(_d(ct['eta_current']))})")
+                                           f"({month_day(ct['eta_planned'])} → {month_day(ct['eta_current'])})")
                         row["status"] = ct["status"]
                 if row["kind"] == "PACK_MPS":
-                    i = (_d(src[9:]) - as_of).days
+                    i = (to_date(src[9:]) - as_of).days
                     planned = (mps.get(sku) or {}).get(i, 0)
                     got = (cons.get(sku) or {}).get(i, 0)
                     if planned > got:
@@ -239,7 +232,7 @@ def _risk_groups(risk, delayed):
 
 def _priority(o, as_of):
     fleet = o["channel"] == "FLEET"
-    open_day = (_d(o["requested_date"]) - dt.timedelta(days=14)) if fleet and o["requested_date"] else as_of
+    open_day = (to_date(o["requested_date"]) - dt.timedelta(days=14)) if fleet and o["requested_date"] else as_of
     basis = (o["requested_date"] if fleet else (o["reserved_at"] or o["ordered_at"])) or ""
     return (0 if fleet else 1, basis), open_day
 
@@ -254,7 +247,7 @@ def _fulfillment(st):
         ex = _explain(as_of, r, o["vehicle_sku"], packs, o["ship_to_region"])
         if open_day > as_of and o["channel"] == "FLEET":
             blocked = "FLEET_WINDOW"
-        elif ex["ship_date"] and _d(ex["ship_date"]) <= as_of:
+        elif ex["ship_date"] and to_date(ex["ship_date"]) <= as_of:
             blocked = "READY"
         else:
             blocked = {"vehicle": "VEHICLE", "pack": "PACK", "vehicle and pack": "BOTH",
@@ -293,11 +286,11 @@ def _build_queue(conn, st):
                 continue
             wos = conn.execute("SELECT COUNT(*) n, SUM(qty_planned) q FROM work_order WHERE site_id='CM-TXG' AND line=?"
                                " AND sched_date=? AND status='RELEASED'", (line, d)).fetchone()
-            days_out = (_d(d) - as_of).days
+            days_out = (to_date(d) - as_of).days
             cm.append({"date": d, "line": line, "qty": sum(split.values()), "split": split, "wo_released": wos["n"],
                        "fence": ("FROZEN" if fence and days_out <= fence["frozen_days"] else
                                  "SLUSHY" if fence and days_out <= fence["slushy_days"] else "FREE"),
-                       "lands_in_reno": atp.next_sailing_available(_d(d)).isoformat()})
+                       "lands_in_reno": atp.next_sailing_available(to_date(d)).isoformat()})
     mps, cons = st["plan"]["mps"], st["cons"]["plan"]
     lost = st["cons"].get("lost_by_day", {})
     pack = []
@@ -327,7 +320,7 @@ def summary(req):
     risk = [dict(r) for r in st["risk"]]
     groups = _risk_groups(risk, delayed)
     fq, counts = _fulfillment(st)
-    leads = [(_d(r["promise"]) - as_of).days for r in st["res"].values() if r.get("promise")]
+    leads = [(to_date(r["promise"]) - as_of).days for r in st["res"].values() if r.get("promise")]
     allocated = conn.execute("SELECT COUNT(*) n FROM customer_order WHERE status='ALLOCATED'").fetchone()["n"]
     decision = conn.execute("""SELECT decision_id, status, title, proposed_at, executed_at FROM decision_log
                                WHERE rule_id='PROMISE-SUPPLY-DELAY' ORDER BY proposed_at DESC LIMIT 1""").fetchone()

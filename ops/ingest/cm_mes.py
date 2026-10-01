@@ -9,7 +9,8 @@ QUARANTINED or REPLAYED, with a reason.
 """
 import json
 
-from .common import Run, bump_status, iso, local_to_utc, parse_iso
+from ..dates import iso
+from .common import Run, bump_status, local_to_utc, parse_iso
 
 POSITION = {"FRM-1": "FRAME", "DU-B": "DRIVE_UNIT", "DU-C": "DRIVE_UNIT", "PU-1": "PEDAL_UNIT", "HMI-1": "HMI",
             "HRN-VH": "HARNESS", "WHL-F": "WHEEL_F", "WHL-R": "WHEEL_R", "TIR-1": "TIRES", "BRK-1": "BRAKES"}
