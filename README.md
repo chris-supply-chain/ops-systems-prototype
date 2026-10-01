@@ -52,29 +52,30 @@ data/            the generated database (not in git)
   `docs/CONVENTIONS.md` lists the shared helpers and the pattern every route and page follows.
 
 ```mermaid
-flowchart TD
-    subgraph IN["Inbound"]
-        A[CM line feed]
-        B[Email / Excel]
-        C[EDI]
+flowchart LR
+    subgraph IN["Inbound feeds"]
+        direction LR
+        A["CM line feed<br/>MES events and<br/>as-built records,<br/>quarantined and replayed<br/>when the mapping changes"]
+        B["Supplier emails,<br/>Excel and EDI<br/>PO confirmations<br/>and promise dates"]
+        C["Customer orders"]
     end
     subgraph CORE["One shared data model"]
-        D[(schema.sql)]
+        D[("schema.sql<br/>92 tables · 4 views")]
     end
-    subgraph OUT["Modules"]
-        E[QMS]
-        F[Replenishment]
-        G[Production scheduling]
-        H[TMS]
+    subgraph OUT["Outputs"]
+        direction LR
+        E["Promised customer<br/>delivery dates<br/>order_promise, from ATP<br/>and the promise loop"]
+        F["Outbound messages<br/>hold instructions,<br/>supplier notices,<br/>debit memos,<br/>customer notes and more,<br/>recorded, not transmitted"]
+        G["ERP journal entries<br/>from posted chargebacks"]
     end
-    A --> D
-    B --> D
-    C --> D
-    D --> E
-    D --> F
-    D --> G
-    D --> H
-    E -.->|hold propagates| F
+    subgraph USE["Use it"]
+        direction LR
+        H["Control Tower dashboard<br/>CM line → customer door,<br/>exceptions by severity<br/>with their impact,<br/>decisions to execute<br/>or reject"]
+        I["The ten modules:<br/>Control Tower<br/>Manufacturing Execution<br/>Production Scheduling<br/>Material Planning<br/>Replenishment<br/>Warehouse Management<br/>Transportation Management<br/>ERP · Procurement<br/>& Finance<br/>Quality Management<br/>Data Platform"]
+    end
+    IN --> CORE
+    CORE --> OUT
+    CORE --> USE
 ```
 
 ![The module switcher: ten modules in one app](docs/screenshots/module-switcher.png)
@@ -153,11 +154,46 @@ it creates the ERP journal entry. This is the walkthrough's story; the app's Dat
 
 </details>
 
+### How we prove it works
+
+Each kind of check records its runs in a table, so the evidence can be queried in the Data Sandbox like any other
+data. The Tests · Evals · Review page shows the latest results and their history.
+
+| Check | What it proves | Sandbox table · columns |
+|---|---|---|
+| **82 tests** | The logic gives the numbers worked out by hand (MRP netting, ATP allocation, parsers, recovery math), and every closed loop closes end to end. | `test_run` · tests, failures, errors, duration_s, detail_json |
+| **6 evals** | Each model's output is scored against the known answer on realistic volume. Below its threshold, the gate fails. | `eval_suite` · metric, threshold<br>`eval_run` · subject_version, score, gate<br>`eval_case` · expected, actual, passed |
+| **21 contracts** | Rules the data must always obey, written as SQL that returns the violating rows. They re-run after each decision, hold release, chargeback step and MRP run. | `data_contract` · check_sql, severity<br>`contract_run` · violations, sample_json |
+| **Change review** | A mapping change is marked deployed only if its tests, evals and contract pass, and the approver is recorded. | `change_review` · test_run_id, eval_run_id, contracts_ok, reviewer, status |
+
+**Regression.** Runs are appended, never overwritten, so a falling eval score shows as a trend on the Tests · Evals ·
+Review page, and below its threshold the gate fails (`eval_run.gate`). When an eval caught a parser bug (a ship date
+read as a delivery date), the fix got its own test in `tests/test_parsers.py`. The suite also runs on other dataset
+dates (`OPS_TEST_AS_OF`), and one test rebuilds the world to check that the same seed gives the same data. Nothing yet
+compares a run with the one before it, so a score that falls but stays above its threshold still passes. More in
+[Tests and evals](#tests-and-evals).
+
+### How we measure the value
+
+Time and money are measured from tables you can open in the Data Sandbox: time from event timestamps, money from the
+records that move it. The estimates behind the numbers, such as vendor prices and the effort of each integration
+option, are stored as data too, so they can be checked.
+
+| Measure | How it's computed, and where it shows | Sandbox table · columns | In the walkthrough's data |
+|---|---|---|---|
+| **Time a process takes** | The time between two events is charged to the later step, and each step is classed as value, control, glue or wait. Deleting the glue and wait steps gives a projected cycle time. **Process Lab** | `process_event` · case_id, activity, ts, actor_role<br>`process_activity` · category | PO confirmation: 73% of elapsed time is glue or waiting. Deleting it would cut the median cycle of the 60 cases that touch it from 9.1 days to 32.7 hours. |
+| **Manual work** | Human touches per case, and per week for each way of integrating a system. **Process Lab, Integration Hub** | `process_event` · actor_role<br>`integration_option` · touches_per_week, latency_minutes, error_rate_pct, run_usd_month | 7 manual touches a week, down from 59 when buyers re-keyed supplier emails. |
+| **Money recovered** | Chargebacks are priced from claims and quality events under each supplier's terms, and count as recovered once posted to the ERP as debit memos. **Warranty & Chargebacks, ERP Core** | `chargeback` · amount_usd, status<br>`erp_journal_line` · debit_usd, credit_usd | $4,344.00 posted, $7,494.80 more sent or disputed, and D-0105 proposes $9,652.30. |
+| **Impact before a decision** | Each proposed decision states its expected impact before anyone approves it, and exceptions can carry theirs in units and dollars. **Closed Loop, Control Tower** | `decision_log` · impact_json<br>`ops_exception` · impact_units, impact_unit, impact_usd | D-0106: $2,825 of air freight protects 192 packs and 1,636 promises that would otherwise slip. |
+| **Software spend** | Thin-app telemetry turns real usage into capability weights, and every vendor is re-scored on them instead of on assumed weights. It also shows time on task per feature. **Buy vs Build** | `app_telemetry` · feature, duration_s, outcome<br>`capability` · assumed_weight<br>`vendor` · annual_usd, impl_weeks<br>`vendor_capability` · fit | The ranking flips in all 3 domains: $304K a year and 49 implementation weeks avoided. |
+
+**Value is stated before a decision, booked when money moves, and measured from usage before software is bought.**
+
 ## Systems
 
 | Module | What it does | Data it reads and writes | Deadlines it tracks |
 |---|---|---|---|
-| **Control Tower** | One picture from the CM line to the customer's door, exceptions ranked by impact, the four closed loops you can execute or reject, and a list of every connected system. | **Reads** `ops_exception`, `decision_log`, `unit`, `shipment`, `customer_order` and every feed's `raw_*` status (52 tables).<br>**Writes**, when you execute a decision: `decision_log`, `hold`, `unit`, `outbound_message`, `chargeback`, `order_promise`, `po_line`, `deviation`, `change_review`, replayed `station_event` and `genealogy`, and an MRP re-run (31 tables). | Customer promise dates: on-time delivery against the first promise, and promises at risk |
+| **Control Tower** | One picture from the CM line to the customer's door, exceptions ranked by severity with their impact, the four closed loops you can execute or reject, and a list of every connected system. | **Reads** `ops_exception`, `decision_log`, `unit`, `shipment`, `customer_order` and every feed's `raw_*` status (52 tables).<br>**Writes**, when you execute a decision: `decision_log`, `hold`, `unit`, `outbound_message`, `chargeback`, `order_promise`, `po_line`, `deviation`, `change_review`, replayed `station_event` and `genealogy`, and an MRP re-run (31 tables). | Customer promise dates: on-time delivery against the first promise, and promises at risk |
 | **Manufacturing Execution (MES)** | Work in progress, first-pass yield and defects by station, the as-built parts tree of any serial, and the CM's data feed with its mappings and quarantine. | **Reads** `station_event`, `genealogy`, `lot_link`, `raw_cm_mes_event`, `mapping_version`, `downtime_event` (34 tables).<br>**Writes** nothing. The feed loaders write this data. | Each production day's build plan, and work orders' scheduled dates |
 | **Production Scheduling** | Each line's daily plan against rated capacity and time fences, the master production schedule, and the next shift's build sequence. | **Reads** `build_plan`, `work_order`, `line_capacity`, `time_fence`, `downtime_event`, `demand_forecast` (18 tables).<br>**Writes** nothing. | Build-plan dates inside frozen and slushy time fences, and the next shift's end time |
 | **Material Planning (MRP)** | Multi-level MRP by part and by day, and available-to-promise: the date a new order can be promised. | **Reads** `bom_line`, `inventory_balance`, `po_line`, `build_plan`, `customer_order`, `replenishment_policy` (24 tables).<br>**Writes** `mrp_run` and `mrp_message` when you re-run MRP. The ATP check writes nothing. | PO need dates against supplier promise dates, and customers' requested and promised dates |
