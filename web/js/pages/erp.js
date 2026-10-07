@@ -436,7 +436,7 @@ const PAGE_CSS = `
 .pg-erp tr.lvl-1 td { font-weight: 500; }
 .pg-erp tr.erp-inside td { color: var(--ink-2); }
 .pg-erp .erp-lvl { font: 600 10.5px/1 var(--font-mono); padding: 2px 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--hairline-strong); }
-.pg-erp .erp-lvl.l-also { background: color-mix(in srgb, var(--sign) 12%, transparent); }
+.pg-erp .erp-lvl.l-oem { background: color-mix(in srgb, var(--sign) 12%, transparent); }
 .pg-erp .erp-eco { color: var(--link); }
 .pg-erp .erp-total { background: var(--surface-2); }
 .pg-erp .erp-ecorow { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--hairline); }
